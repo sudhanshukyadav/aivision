@@ -9,7 +9,7 @@ export default {
 
     try {
       // ------------------------------------------------------------
-      // 1. AUTHENTICATION & LOGIN (/api/login or /api/auth/login)
+      // 1. AUTHENTICATION & LOGIN (/api/login & /api/auth/login)
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
@@ -18,16 +18,16 @@ export default {
         const password = String(body.password || '').trim();
 
         if (!rawLoc || !username || !password) {
-          return jsonResponse({ 
-            status: 'error', 
-            error: 'Location code, username, and password are required.' 
+          return jsonResponse({
+            status: 'error',
+            error: 'Location code, username, and password are required.'
           }, 400);
         }
 
         const locUpper = rawLoc.toUpperCase();
         const locFlipped = locUpper.includes('-') ? locUpper.split('-').reverse().join('-') : locUpper;
 
-        // Query user from D1
+        // Query user from D1 database
         const user = await env.DB.prepare(
           `SELECT * FROM users 
            WHERE (UPPER(location_id) = ? OR UPPER(location_id) = ?) 
@@ -36,35 +36,35 @@ export default {
         ).bind(locUpper, locFlipped, username).first();
 
         if (!user) {
-          return jsonResponse({ 
-            status: 'error', 
-            error: 'Invalid location or username.' 
+          return jsonResponse({
+            status: 'error',
+            error: 'Invalid location or username.'
           }, 401);
         }
 
         const isPasswordValid = await verifyPassword(password, user.password_hash);
         if (!isPasswordValid) {
-          return jsonResponse({ 
-            status: 'error', 
-            error: 'Incorrect password.' 
+          return jsonResponse({
+            status: 'error',
+            error: 'Incorrect password.'
           }, 401);
         }
 
         const actualLocId = user.location_id;
 
-        // Facility details
+        // Fetch facility details
         const locationMeta = await env.DB.prepare(
           `SELECT location_id, description, address FROM locations WHERE location_id = ?`
         ).bind(actualLocId).first() || { location_id: actualLocId, description: 'Active Facility' };
 
-        // Facility cameras
+        // Fetch facility cameras
         const cameraRecords = await env.DB.prepare(
           `SELECT camera_id, location_id, name FROM cameras WHERE location_id = ? ORDER BY camera_id ASC`
         ).bind(actualLocId).all();
 
         const allCameras = cameraRecords.results || [];
 
-        // Camera permissions
+        // Parse camera permissions
         let allowedCameras = ['*'];
         try {
           allowedCameras = JSON.parse(user.allowed_cameras || '["*"]');
@@ -81,7 +81,6 @@ export default {
           );
         }
 
-        // Return status: 'success' to satisfy script.js line 70
         return jsonResponse({
           status: 'success',
           success: true,
@@ -189,7 +188,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 4. WAITLIST HANDLER (/api/waitlist)
+      // 4. WAITLIST SUBMISSIONS (/api/waitlist)
       // ------------------------------------------------------------
       if (pathname === '/api/waitlist' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
@@ -201,16 +200,55 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 5. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
+      // 5. LIVE HLS STREAMING (/live/:file)
+      // Reads directly from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
+      // ------------------------------------------------------------
+      if (pathname.startsWith('/live/')) {
+        let rawFile = pathname.replace(/^\/live\//, '');
+        const location = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+
+        if (!rawFile.includes('.')) {
+          rawFile = `${rawFile}.m3u8`;
+        }
+
+        // Try exact path first (e.g. HQ-AD/apcam.m3u8)
+        let r2Key = `${location}/${rawFile}`;
+        let object = await env.MEDIA_BUCKET.get(r2Key);
+
+        // Fallback: If client requested a nested path like /live/apcam/stream.m3u8
+        if (!object && rawFile.includes('/')) {
+          const strippedFilename = rawFile.split('/').pop();
+          r2Key = `${location}/${strippedFilename}`;
+          object = await env.MEDIA_BUCKET.get(r2Key);
+        }
+
+        if (!object) {
+          return new Response(`Stream offline or chunk not ready: ${r2Key}`, {
+            status: 404,
+            headers: {
+              'Access-Control-Allow-Origin': '*',
+              'Cache-Control': 'no-cache, no-store, must-revalidate'
+            }
+          });
+        }
+
+        const isM3U8 = rawFile.endsWith('.m3u8');
+        const headers = new Headers();
+        headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Content-Type', object.httpMetadata?.contentType || (isM3U8 ? 'application/vnd.apple.mpegurl' : 'video/mp2t'));
+        headers.set('Cache-Control', isM3U8 ? 'no-cache, no-store, must-revalidate' : 'public, max-age=31536000, immutable');
+
+        return new Response(object.body, { headers });
+      }
+
+      // ------------------------------------------------------------
+      // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
+      // Reads from: HQ-AD/snapshots/<cam>/*.jpg
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
-        const rawLoc = (url.searchParams.get('location') || '').trim();
-        const rawCam = (url.searchParams.get('cam') || url.searchParams.get('camera') || '').trim();
+        const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim();
+        const rawCam = (url.searchParams.get('cam') || url.searchParams.get('camera') || 'apcam').trim();
         const isDebug = url.searchParams.has('debug');
-
-        if (!rawLoc || !rawCam) {
-          return jsonResponse({ error: 'Parameters "location" and "cam" are required.' }, 400);
-        }
 
         const locUpper = rawLoc.toUpperCase();
         const camTargets = new Set([rawCam.toLowerCase(), rawCam.toUpperCase(), rawCam]);
@@ -236,25 +274,26 @@ export default {
           } catch (e) {}
         }
 
-        const prefixSearches = [
-          `${locUpper}/snapshots/`,
-          `${rawLoc.toLowerCase()}/snapshots/`,
-          `${locUpper}/SNAPSHOTS/`
-        ];
-
+        // Search prefixes inside the snapshots subdirectory
         let allObjects = [];
-        for (const p of prefixSearches) {
-          const list = await env.MEDIA_BUCKET.list({ prefix: p, limit: 150 });
+        for (const target of camTargets) {
+          const prefix = `${locUpper}/snapshots/${target}/`;
+          const list = await env.MEDIA_BUCKET.list({ prefix, limit: 100 });
           if (list.objects && list.objects.length > 0) {
             allObjects.push(...list.objects);
           }
         }
 
-        const uniqueObjects = Array.from(new Map(allObjects.map(obj => [obj.key, obj])).values());
+        // Fallback broad search across location snapshots if specific alias prefix had no objects
+        if (allObjects.length === 0) {
+          const broadList = await env.MEDIA_BUCKET.list({ prefix: `${locUpper}/snapshots/`, limit: 150 });
+          if (broadList.objects) {
+            allObjects.push(...broadList.objects);
+          }
+        }
 
-        const validImages = uniqueObjects.filter(obj => 
-          obj.size > 0 && /\.(jpe?g|png|webp)$/i.test(obj.key)
-        );
+        const uniqueObjects = Array.from(new Map(allObjects.map(obj => [obj.key, obj])).values());
+        const validImages = uniqueObjects.filter(obj => obj.size > 0 && /\.(jpe?g|png|webp)$/i.test(obj.key));
 
         const candidates = validImages.filter(obj => {
           const keyLower = obj.key.toLowerCase();
@@ -309,14 +348,57 @@ export default {
         headers.set('Content-Type', object.httpMetadata?.contentType || 'image/jpeg');
         headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
         headers.set('ETag', object.httpEtag);
-        headers.set('X-AISYS-Matched-Key', latestKey);
+        headers.set('X-AISYS-Snapshot-Key', latestKey);
         headers.set('Access-Control-Allow-Origin', '*');
 
         return new Response(object.body, { headers });
       }
 
       // ------------------------------------------------------------
-      // 6. STATIC SPA ROUTING
+      // 7. MOTION RETRIEVAL (/api/motion/latest)
+      // Reads from: HQ-AD/motion/<cam>/*.mp4
+      // ------------------------------------------------------------
+      if (pathname === '/api/motion/latest' && request.method === 'GET') {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const isJson = url.searchParams.has('json');
+        const prefix = `${loc}/motion/${cam}/`;
+
+        const list = await env.MEDIA_BUCKET.list({ prefix, limit: 30 });
+        const clips = (list.objects || []).filter(o => o.key.toLowerCase().endsWith('.mp4'));
+
+        if (clips.length === 0) {
+          return jsonResponse({ status: 'idle', message: 'No motion clips available', camera: cam, location: loc }, 404);
+        }
+
+        clips.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+        const latestClip = clips[0];
+
+        if (isJson) {
+          return jsonResponse({
+            status: 'success',
+            camera: cam,
+            location: loc,
+            clip: {
+              key: latestClip.key,
+              bytes: latestClip.size,
+              uploaded: latestClip.uploaded
+            }
+          });
+        }
+
+        const videoObject = await env.MEDIA_BUCKET.get(latestClip.key);
+        const headers = new Headers();
+        headers.set('Content-Type', 'video/mp4');
+        headers.set('Cache-Control', 'public, max-age=86400');
+        headers.set('X-AISYS-Motion-Key', latestClip.key);
+        headers.set('Access-Control-Allow-Origin', '*');
+
+        return new Response(videoObject.body, { headers });
+      }
+
+      // ------------------------------------------------------------
+      // 8. STATIC ASSET & SPA ROUTING
       // ------------------------------------------------------------
       if (env.ASSETS) {
         let response = await env.ASSETS.fetch(request);
