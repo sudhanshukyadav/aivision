@@ -9,75 +9,80 @@ export default {
 
     try {
       // ------------------------------------------------------------
-      // 1. AUTHENTICATION & LOGIN (/api/login & /api/auth/login)
+      // 1. STRICT COMPOSITE AUTHENTICATION: (location_id + username)
+      // Endpoints: /api/login and /api/auth/login
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
-        const rawLoc = (body.locationId || body.locationCode || body.location || '').trim();
-        const username = (body.username || body.operator || body.user || '').trim();
+        const rawLoc = (body.locationId || body.siteId || body.location || '').trim();
+        const rawUser = (body.username || body.user || '').trim();
         const password = String(body.password || '').trim();
 
-        if (!rawLoc || !username || !password) {
+        if (!rawLoc || !rawUser || !password) {
           return jsonResponse({
             status: 'error',
-            error: 'Location code, username, and password are required.'
+            error: 'Location ID, username, and password are all required.'
           }, 400);
         }
 
         const locUpper = rawLoc.toUpperCase();
-        const locFlipped = locUpper.includes('-') ? locUpper.split('-').reverse().join('-') : locUpper;
+        const usernameLower = rawUser.toLowerCase();
 
-        // Query user record from D1
+        // Query strictly on the composite unique pair (location_id, username)
         const user = await env.DB.prepare(
           `SELECT * FROM users 
-           WHERE (UPPER(location_id) = ? OR UPPER(location_id) = ?) 
-             AND LOWER(username) = LOWER(?) 
+           WHERE UPPER(location_id) = ? 
+             AND LOWER(username) = ? 
            LIMIT 1`
-        ).bind(locUpper, locFlipped, username).first();
+        ).bind(locUpper, usernameLower).first();
 
         if (!user) {
           return jsonResponse({
             status: 'error',
-            error: 'Invalid location code or username.'
+            error: 'Authentication failed: Invalid Location ID or Username.'
           }, 401);
         }
 
+        // Verify password hash
         const isPasswordValid = await verifyPassword(password, user.password_hash);
         if (!isPasswordValid) {
           return jsonResponse({
             status: 'error',
-            error: 'Incorrect password.'
+            error: 'Authentication failed: Incorrect password.'
           }, 401);
         }
 
-        const actualLocId = user.location_id;
+        // Canonical fixed location ID from database
+        const fixedLocationId = user.location_id;
 
-        // Fetch facility details
+        // Fetch location details
         const locationMeta = await env.DB.prepare(
           `SELECT location_id, description, address FROM locations WHERE location_id = ?`
-        ).bind(actualLocId).first() || { location_id: actualLocId, description: 'Facility' };
+        ).bind(fixedLocationId).first() || { location_id: fixedLocationId, description: 'Active Facility' };
 
-        // Fetch facility cameras
+        // Fetch all cameras configured for this specific location
         const cameraRecords = await env.DB.prepare(
           `SELECT camera_id, location_id, name FROM cameras WHERE location_id = ? ORDER BY camera_id ASC`
-        ).bind(actualLocId).all();
+        ).bind(fixedLocationId).all();
 
-        const allCameras = cameraRecords.results || [];
+        const siteCameras = cameraRecords.results || [];
 
         // Parse camera permissions
-        let allowedCameras = ['*'];
+        let allowedCameraIds = ['*'];
         try {
-          allowedCameras = JSON.parse(user.allowed_cameras || '["*"]');
+          allowedCameraIds = JSON.parse(user.allowed_cameras || '["*"]');
         } catch {
-          allowedCameras = ['*'];
+          allowedCameraIds = ['*'];
         }
 
-        let authorizedCameras = allCameras;
-        if (!allowedCameras.includes('*') && user.role !== 'admin') {
-          const allowedLower = allowedCameras.map(a => String(a).toLowerCase());
-          authorizedCameras = allCameras.filter(cam =>
-            allowedLower.includes(String(cam.camera_id).toLowerCase()) ||
-            allowedLower.includes((cam.name || '').toLowerCase())
+        let accessibleCameras = siteCameras;
+
+        // Admins see all cameras; others are filtered by allowed_cameras
+        if (user.role !== 'admin' && !allowedCameraIds.includes('*')) {
+          const lowerAllowed = allowedCameraIds.map(c => String(c).toLowerCase());
+          accessibleCameras = siteCameras.filter(cam =>
+            lowerAllowed.includes(String(cam.camera_id).toLowerCase()) ||
+            lowerAllowed.includes(String(cam.name || '').toLowerCase())
           );
         }
 
@@ -88,16 +93,32 @@ export default {
           user: {
             userId: user.user_id,
             username: user.username,
-            role: user.role,
-            locationId: actualLocId,
+            role: user.role,                  // Fixed role
+            locationId: fixedLocationId,     // Fixed site ID
             location: locationMeta,
-            cameras: authorizedCameras
+            cameras: accessibleCameras        // Fixed camera array
           }
         });
       }
 
       // ------------------------------------------------------------
-      // 2. ADMIN EXPLORER: LOAD TABLES (/api/admin/tables)
+      // 2. SITES / LOCATIONS LISTING (/api/sites)
+      // ------------------------------------------------------------
+      if (pathname === '/api/sites' && request.method === 'GET') {
+        const rows = await env.DB.prepare(
+          `SELECT location_id, description, address FROM locations ORDER BY location_id ASC`
+        ).all();
+
+        const siteList = (rows.results || []).map(r => ({
+          locationId: r.location_id,
+          label: r.description ? `${r.location_id} — ${r.description}` : r.location_id
+        }));
+
+        return jsonResponse({ status: 'success', sites: siteList });
+      }
+
+      // ------------------------------------------------------------
+      // 3. ADMIN EXPLORER: LOAD TABLES (/api/admin/tables)
       // ------------------------------------------------------------
       if (pathname === '/api/admin/tables' && request.method === 'GET') {
         const adminId = request.headers.get('x-admin-userid');
@@ -123,7 +144,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 3. ADMIN EXPLORER: SAVE RECORD (/api/admin/tables/save)
+      // 4. ADMIN EXPLORER: SAVE RECORD (/api/admin/tables/save)
       // ------------------------------------------------------------
       if (pathname === '/api/admin/tables/save' && request.method === 'POST') {
         const adminId = request.headers.get('x-admin-userid');
@@ -188,20 +209,8 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 4. WAITLIST SUBMISSIONS (/api/waitlist)
-      // ------------------------------------------------------------
-      if (pathname === '/api/waitlist' && request.method === 'POST') {
-        const body = await request.json().catch(() => ({}));
-        const email = String(body.email || '').trim();
-        if (!email || !email.includes('@')) {
-          return jsonResponse({ error: 'Valid email required.' }, 400);
-        }
-        return jsonResponse({ message: "You're on the list!" });
-      }
-
-      // ------------------------------------------------------------
       // 5. LIVE HLS STREAMING (/live/:file)
-      // Reads from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
+      // Reads directly from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
       // ------------------------------------------------------------
       if (pathname.startsWith('/live/')) {
         let rawFile = pathname.replace(/^\/live\//, '');
@@ -214,7 +223,7 @@ export default {
         let r2Key = `${location}/${rawFile}`;
         let object = await env.MEDIA_BUCKET.get(r2Key);
 
-        // Fallback for nested URLs like /live/apcam/stream.m3u8
+        // Fallback for nested URLs (e.g. /live/apcam/stream.m3u8)
         if (!object && rawFile.includes('/')) {
           const strippedFilename = rawFile.split('/').pop();
           r2Key = `${location}/${strippedFilename}`;
@@ -242,8 +251,8 @@ export default {
 
       // ------------------------------------------------------------
       // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
-      // Supports index=0..3 (for 4-quad view) and json=1 metadata
       // Reads from: HQ-AD/snapshots/<cam>/*.jpg
+      // Supports: index=0..3 (for 2x2 quad view) and json=1 (metadata)
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
         const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
@@ -257,7 +266,7 @@ export default {
 
         if (images.length === 0) {
           if (isJson) {
-            return jsonResponse({ error: 'No snapshots found', prefix }, 404);
+            return jsonResponse({ error: 'No snapshots available', prefix }, 404);
           }
           return new Response(generatePlaceholderSvg(rawLoc, rawCam), {
             status: 200,
@@ -269,7 +278,7 @@ export default {
           });
         }
 
-        // Sort descending: index 0 = newest, index 3 = 4th newest
+        // Sort descending: index 0 is newest, index 1 is 2nd newest, etc.
         images.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
         const selectedIndex = Math.min(index, images.length - 1);
         const selectedObject = images[selectedIndex];
@@ -302,7 +311,7 @@ export default {
 
       // ------------------------------------------------------------
       // 7. ON-DEMAND VIDEO REQUEST (/api/motion/request)
-      // Drops a marker in R2 for local watcher to upload the 10s MP4
+      // Drops a marker in R2 for the local Windows watcher to upload the MP4
       // ------------------------------------------------------------
       if (pathname === '/api/motion/request' && (request.method === 'POST' || request.method === 'GET')) {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -318,7 +327,7 @@ export default {
 
         const videoKey = `${loc}/motion/${cam}/${file}`;
 
-        // Check if video is already present on R2
+        // Return immediately if video is already available in R2
         const existing = await env.MEDIA_BUCKET.head(videoKey);
         if (existing) {
           return jsonResponse({
@@ -328,7 +337,7 @@ export default {
           });
         }
 
-        // Drop .req marker in R2 for the local Windows watcher to detect
+        // Drop .req marker in R2 for local watcher to pick up
         const markerKey = `${loc}/requests/${cam}__${file}.req`;
         await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
           httpMetadata: { contentType: 'application/json' }
@@ -344,7 +353,7 @@ export default {
 
       // ------------------------------------------------------------
       // 8. MOTION VIDEO STATUS CHECK (/api/motion/status)
-      // Frontend polls this while waiting for the requested MP4
+      // Polled by frontend while waiting for the requested MP4 to upload
       // ------------------------------------------------------------
       if (pathname === '/api/motion/status' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -374,7 +383,7 @@ export default {
 
       // ------------------------------------------------------------
       // 9. MOTION VIDEO STREAMING (/api/motion/latest)
-      // Reads from: HQ-AD/motion/<cam>/*.mp4
+      // Serves requested .mp4 motion clip
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -424,7 +433,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 10. STATIC ASSETS & SINGLE-PAGE APP FALLBACK
+      // 10. STATIC ASSETS & SINGLE-PAGE APP ROUTING
       // ------------------------------------------------------------
       if (env.ASSETS) {
         let response = await env.ASSETS.fetch(request);
@@ -439,7 +448,7 @@ export default {
         return response;
       }
 
-      return new Response('AISYS Edge Operational', { status: 200 });
+      return new Response('AISYS Edge API operational.', { status: 200 });
 
     } catch (err) {
       return jsonResponse({ error: err.message || 'Internal Edge Runtime Error' }, 500);
@@ -460,7 +469,7 @@ async function getAdminUser(env, userId) {
 
 async function verifyPassword(inputPassword, storedHash) {
   if (!inputPassword || !storedHash) return false;
-  if (storedHash === inputPassword) return true; // Plaintext support
+  if (storedHash === inputPassword) return true; // Direct plain text match support
 
   const encoder = new TextEncoder();
   const data = encoder.encode(inputPassword);
