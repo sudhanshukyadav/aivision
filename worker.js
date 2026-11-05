@@ -27,7 +27,7 @@ export default {
         const locUpper = rawLoc.toUpperCase();
         const locFlipped = locUpper.includes('-') ? locUpper.split('-').reverse().join('-') : locUpper;
 
-        // Query user from D1 database
+        // Query user record from D1
         const user = await env.DB.prepare(
           `SELECT * FROM users 
            WHERE (UPPER(location_id) = ? OR UPPER(location_id) = ?) 
@@ -38,7 +38,7 @@ export default {
         if (!user) {
           return jsonResponse({
             status: 'error',
-            error: 'Invalid location or username.'
+            error: 'Invalid location code or username.'
           }, 401);
         }
 
@@ -55,7 +55,7 @@ export default {
         // Fetch facility details
         const locationMeta = await env.DB.prepare(
           `SELECT location_id, description, address FROM locations WHERE location_id = ?`
-        ).bind(actualLocId).first() || { location_id: actualLocId, description: 'Active Facility' };
+        ).bind(actualLocId).first() || { location_id: actualLocId, description: 'Facility' };
 
         // Fetch facility cameras
         const cameraRecords = await env.DB.prepare(
@@ -201,7 +201,7 @@ export default {
 
       // ------------------------------------------------------------
       // 5. LIVE HLS STREAMING (/live/:file)
-      // Reads directly from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
+      // Reads from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
       // ------------------------------------------------------------
       if (pathname.startsWith('/live/')) {
         let rawFile = pathname.replace(/^\/live\//, '');
@@ -211,11 +211,10 @@ export default {
           rawFile = `${rawFile}.m3u8`;
         }
 
-        // Try exact path first (e.g. HQ-AD/apcam.m3u8)
         let r2Key = `${location}/${rawFile}`;
         let object = await env.MEDIA_BUCKET.get(r2Key);
 
-        // Fallback: If client requested a nested path like /live/apcam/stream.m3u8
+        // Fallback for nested URLs like /live/apcam/stream.m3u8
         if (!object && rawFile.includes('/')) {
           const strippedFilename = rawFile.split('/').pop();
           r2Key = `${location}/${strippedFilename}`;
@@ -223,7 +222,7 @@ export default {
         }
 
         if (!object) {
-          return new Response(`Stream offline or chunk not ready: ${r2Key}`, {
+          return new Response(`Stream offline or segment not ready: ${r2Key}`, {
             status: 404,
             headers: {
               'Access-Control-Allow-Origin': '*',
@@ -243,90 +242,24 @@ export default {
 
       // ------------------------------------------------------------
       // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
+      // Supports index=0..3 (for 4-quad view) and json=1 metadata
       // Reads from: HQ-AD/snapshots/<cam>/*.jpg
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
-        const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim();
-        const rawCam = (url.searchParams.get('cam') || url.searchParams.get('camera') || 'apcam').trim();
-        const isDebug = url.searchParams.has('debug');
+        const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
+        const rawCam = (url.searchParams.get('cam') || url.searchParams.get('camera') || 'apcam').trim().toLowerCase();
+        const index = Math.max(0, parseInt(url.searchParams.get('index') || '0', 10));
+        const isJson = url.searchParams.has('json');
 
-        const locUpper = rawLoc.toUpperCase();
-        const camTargets = new Set([rawCam.toLowerCase(), rawCam.toUpperCase(), rawCam]);
+        const prefix = `${rawLoc}/snapshots/${rawCam}/`;
+        const list = await env.MEDIA_BUCKET.list({ prefix, limit: 60 });
+        const images = (list.objects || []).filter(o => o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key));
 
-        if (env.DB) {
-          try {
-            const camRow = await env.DB.prepare(
-              `SELECT camera_id, name FROM cameras 
-               WHERE (camera_id = ? OR LOWER(name) = LOWER(?))
-                 AND UPPER(location_id) = ? 
-               LIMIT 1`
-            ).bind(rawCam, rawCam, locUpper).first();
-
-            if (camRow) {
-              if (camRow.name) {
-                camTargets.add(camRow.name);
-                camTargets.add(camRow.name.toLowerCase());
-              }
-              if (camRow.camera_id) {
-                camTargets.add(String(camRow.camera_id));
-              }
-            }
-          } catch (e) {}
-        }
-
-        // Search prefixes inside the snapshots subdirectory
-        let allObjects = [];
-        for (const target of camTargets) {
-          const prefix = `${locUpper}/snapshots/${target}/`;
-          const list = await env.MEDIA_BUCKET.list({ prefix, limit: 100 });
-          if (list.objects && list.objects.length > 0) {
-            allObjects.push(...list.objects);
+        if (images.length === 0) {
+          if (isJson) {
+            return jsonResponse({ error: 'No snapshots found', prefix }, 404);
           }
-        }
-
-        // Fallback broad search across location snapshots if specific alias prefix had no objects
-        if (allObjects.length === 0) {
-          const broadList = await env.MEDIA_BUCKET.list({ prefix: `${locUpper}/snapshots/`, limit: 150 });
-          if (broadList.objects) {
-            allObjects.push(...broadList.objects);
-          }
-        }
-
-        const uniqueObjects = Array.from(new Map(allObjects.map(obj => [obj.key, obj])).values());
-        const validImages = uniqueObjects.filter(obj => obj.size > 0 && /\.(jpe?g|png|webp)$/i.test(obj.key));
-
-        const candidates = validImages.filter(obj => {
-          const keyLower = obj.key.toLowerCase();
-          for (const target of camTargets) {
-            const t = target.toLowerCase();
-            if (
-              keyLower.includes(`/${t}/`) ||
-              keyLower.includes(`/${t}.`) ||
-              keyLower.includes(`/${t}_`) ||
-              keyLower.includes(`/${t}-`) ||
-              keyLower.endsWith(`/${t}`) ||
-              keyLower.includes(`snapshots/${t}`)
-            ) {
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (isDebug) {
-          return jsonResponse({
-            status: 'diagnostic_mode',
-            params: { location: rawLoc, cam: rawCam },
-            searchedAliases: Array.from(camTargets),
-            totalR2ObjectsFound: uniqueObjects.length,
-            allR2Keys: uniqueObjects.map(o => ({ key: o.key, bytes: o.size, uploaded: o.uploaded })),
-            matchedImageCount: candidates.length,
-            matchedImages: candidates.map(o => ({ key: o.key, bytes: o.size, uploaded: o.uploaded }))
-          });
-        }
-
-        if (candidates.length === 0) {
-          return new Response(generatePlaceholderSvg(locUpper, rawCam), {
+          return new Response(generatePlaceholderSvg(rawLoc, rawCam), {
             status: 200,
             headers: {
               'Content-Type': 'image/svg+xml',
@@ -336,69 +269,162 @@ export default {
           });
         }
 
-        candidates.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
-        const latestKey = candidates[0].key;
+        // Sort descending: index 0 = newest, index 3 = 4th newest
+        images.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+        const selectedIndex = Math.min(index, images.length - 1);
+        const selectedObject = images[selectedIndex];
 
-        const object = await env.MEDIA_BUCKET.get(latestKey);
+        if (isJson) {
+          return jsonResponse({
+            status: 'success',
+            index: selectedIndex,
+            key: selectedObject.key,
+            uploaded: selectedObject.uploaded,
+            size: selectedObject.size
+          });
+        }
+
+        const object = await env.MEDIA_BUCKET.get(selectedObject.key);
         if (!object) {
-          return jsonResponse({ error: 'Object missing from storage' }, 404);
+          return jsonResponse({ error: 'Snapshot object missing from storage' }, 404);
         }
 
         const headers = new Headers();
         headers.set('Content-Type', object.httpMetadata?.contentType || 'image/jpeg');
         headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
         headers.set('ETag', object.httpEtag);
-        headers.set('X-AISYS-Snapshot-Key', latestKey);
+        headers.set('X-AISYS-Snapshot-Index', String(selectedIndex));
+        headers.set('X-AISYS-Snapshot-Key', selectedObject.key);
         headers.set('Access-Control-Allow-Origin', '*');
 
         return new Response(object.body, { headers });
       }
 
       // ------------------------------------------------------------
-      // 7. MOTION RETRIEVAL (/api/motion/latest)
+      // 7. ON-DEMAND VIDEO REQUEST (/api/motion/request)
+      // Drops a marker in R2 for local watcher to upload the 10s MP4
+      // ------------------------------------------------------------
+      if (pathname === '/api/motion/request' && (request.method === 'POST' || request.method === 'GET')) {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        let file = (url.searchParams.get('file') || '').trim();
+
+        if (!file) {
+          return jsonResponse({ error: 'Parameter "file" (e.g. 20261105_103010_motion.mp4) is required.' }, 400);
+        }
+        if (!file.endsWith('.mp4')) {
+          file = `${file}.mp4`;
+        }
+
+        const videoKey = `${loc}/motion/${cam}/${file}`;
+
+        // Check if video is already present on R2
+        const existing = await env.MEDIA_BUCKET.head(videoKey);
+        if (existing) {
+          return jsonResponse({
+            status: 'ready',
+            key: videoKey,
+            playbackUrl: `/api/motion/latest?location=${loc}&cam=${cam}&file=${encodeURIComponent(file)}`
+          });
+        }
+
+        // Drop .req marker in R2 for the local Windows watcher to detect
+        const markerKey = `${loc}/requests/${cam}__${file}.req`;
+        await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
+          httpMetadata: { contentType: 'application/json' }
+        });
+
+        return jsonResponse({
+          status: 'pending',
+          message: 'Video upload requested from local storage.',
+          key: videoKey,
+          marker: markerKey
+        });
+      }
+
+      // ------------------------------------------------------------
+      // 8. MOTION VIDEO STATUS CHECK (/api/motion/status)
+      // Frontend polls this while waiting for the requested MP4
+      // ------------------------------------------------------------
+      if (pathname === '/api/motion/status' && request.method === 'GET') {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        let file = url.searchParams.get('file');
+
+        if (!file) {
+          return jsonResponse({ error: 'Parameter "file" is required.' }, 400);
+        }
+        if (!file.endsWith('.mp4')) {
+          file = `${file}.mp4`;
+        }
+
+        const videoKey = `${loc}/motion/${cam}/${file}`;
+        const existing = await env.MEDIA_BUCKET.head(videoKey);
+
+        if (existing) {
+          return jsonResponse({
+            status: 'ready',
+            size: existing.size,
+            key: videoKey
+          });
+        }
+
+        return jsonResponse({ status: 'transferring' });
+      }
+
+      // ------------------------------------------------------------
+      // 9. MOTION VIDEO STREAMING (/api/motion/latest)
       // Reads from: HQ-AD/motion/<cam>/*.mp4
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
         const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const requestedFile = url.searchParams.get('file');
         const isJson = url.searchParams.has('json');
-        const prefix = `${loc}/motion/${cam}/`;
 
-        const list = await env.MEDIA_BUCKET.list({ prefix, limit: 30 });
-        const clips = (list.objects || []).filter(o => o.key.toLowerCase().endsWith('.mp4'));
+        let targetKey = null;
 
-        if (clips.length === 0) {
-          return jsonResponse({ status: 'idle', message: 'No motion clips available', camera: cam, location: loc }, 404);
+        if (requestedFile) {
+          const cleanFile = requestedFile.endsWith('.mp4') ? requestedFile : `${requestedFile}.mp4`;
+          targetKey = `${loc}/motion/${cam}/${cleanFile}`;
+        } else {
+          const prefix = `${loc}/motion/${cam}/`;
+          const list = await env.MEDIA_BUCKET.list({ prefix, limit: 30 });
+          const clips = (list.objects || []).filter(o => o.key.toLowerCase().endsWith('.mp4'));
+
+          if (clips.length === 0) {
+            return jsonResponse({ status: 'idle', message: 'No motion clips found', camera: cam }, 404);
+          }
+
+          clips.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+          targetKey = clips[0].key;
         }
 
-        clips.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
-        const latestClip = clips[0];
+        const videoObject = await env.MEDIA_BUCKET.get(targetKey);
+        if (!videoObject) {
+          return jsonResponse({ error: 'Video clip not ready or missing', key: targetKey }, 404);
+        }
 
         if (isJson) {
           return jsonResponse({
             status: 'success',
-            camera: cam,
-            location: loc,
-            clip: {
-              key: latestClip.key,
-              bytes: latestClip.size,
-              uploaded: latestClip.uploaded
-            }
+            key: targetKey,
+            size: videoObject.size,
+            uploaded: videoObject.uploaded
           });
         }
 
-        const videoObject = await env.MEDIA_BUCKET.get(latestClip.key);
         const headers = new Headers();
         headers.set('Content-Type', 'video/mp4');
         headers.set('Cache-Control', 'public, max-age=86400');
-        headers.set('X-AISYS-Motion-Key', latestClip.key);
+        headers.set('X-AISYS-Motion-Key', targetKey);
         headers.set('Access-Control-Allow-Origin', '*');
 
         return new Response(videoObject.body, { headers });
       }
 
       // ------------------------------------------------------------
-      // 8. STATIC ASSET & SPA ROUTING
+      // 10. STATIC ASSETS & SINGLE-PAGE APP FALLBACK
       // ------------------------------------------------------------
       if (env.ASSETS) {
         let response = await env.ASSETS.fetch(request);
@@ -413,7 +439,7 @@ export default {
         return response;
       }
 
-      return new Response('AISYS Edge API operational.', { status: 200 });
+      return new Response('AISYS Edge Operational', { status: 200 });
 
     } catch (err) {
       return jsonResponse({ error: err.message || 'Internal Edge Runtime Error' }, 500);
