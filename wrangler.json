@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aisys",
+  "main": "worker.js",
+  "compatibility_date": "2024-09-23",
+  "assets": {
+    "directory": "./public"
+  },
+  "routes": [
+    { "pattern": "aisys.cam/*", "zone_name": "aisys.cam" },
+    { "pattern": "www.aisys.cam/*", "zone_name": "aisys.cam" }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "aisys-media"
+    }
+  ],
+  "services": [
+    {
+      "binding": "DB",
+      "service": "aisys-db",
+      "entrypoint": "DbService"
+    }
+  ]
+}
