@@ -1,207 +1,219 @@
-(function () {
-  function initLive() {
-    const sessionRaw = sessionStorage.getItem('aisys_session');
-    if (!sessionRaw) {
-      console.warn('[AISYS] No session found. Redirecting to login...');
-      window.location.href = '/';
-      return;
-    }
+// ============================================================
+// AISYS Live Camera Dashboard (4-Snapshot Quad View)
+// ============================================================
 
-    let user;
-    try {
-      user = JSON.parse(sessionRaw);
-    } catch (e) {
-      console.error('[AISYS] Corrupted session JSON:', e);
-      sessionStorage.removeItem('aisys_session');
-      window.location.href = '/';
-      return;
-    }
+const POLL_INTERVAL_MS = 2500; // Poll for near real-time snapshots every 2.5s
+let activePollTimer = null;
+let currentSession = null;
 
-    const locationBadge = document.getElementById('locationBadge');
-    const userPill = document.getElementById('userPill');
-    const cameraGrid = document.getElementById('cameraGrid');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const btnModeSnapshots = document.getElementById('btnModeSnapshots');
-    const btnModeLive = document.getElementById('btnModeLive');
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+  initDashboard();
+});
 
-    // Update Header Info
-    if (locationBadge) {
-      locationBadge.textContent = `${user.locationId || 'LOC'} — ${user.location?.description || 'Active Facility'}`;
-    }
-    if (userPill) {
-      userPill.textContent = `${user.username || 'User'} (${user.role || 'viewer'})`;
-    }
+function initDashboard() {
+  const sessionRaw = localStorage.getItem('aisys_session');
+  if (!sessionRaw) {
+    window.location.href = '/login.html';
+    return;
+  }
 
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => {
-        sessionStorage.removeItem('aisys_session');
-        window.location.href = '/';
-      });
-    }
+  try {
+    currentSession = JSON.parse(sessionRaw);
+  } catch (e) {
+    window.location.href = '/login.html';
+    return;
+  }
 
-    const cameras = user.cameras || [];
-    if (cameras.length === 0) {
-      if (cameraGrid) {
-        cameraGrid.innerHTML = `
-          <div class="no-cams-alert">
-            <h3>No Authorized Cameras</h3>
-            <p>No video channels have been assigned to your profile for location ${escapeHtml(user.locationId || '')}.</p>
+  const locationId = currentSession.locationId || 'HQ-AD';
+  const cameras = currentSession.cameras || [{ camera_id: 'apcam', name: 'AP Camera' }];
+
+  renderCameraGrid(locationId, cameras);
+  startSnapshotPolling(locationId, cameras);
+}
+
+// ------------------------------------------------------------
+// RENDER CAMERA CONTAINERS
+// ------------------------------------------------------------
+function renderCameraGrid(locationId, cameras) {
+  const container = document.getElementById('camera-grid') || document.querySelector('.camera-container');
+  if (!container) return;
+
+  container.innerHTML = cameras.map(cam => {
+    const camId = (cam.camera_id || cam.name || 'apcam').toLowerCase();
+    const camName = cam.name || cam.camera_id || 'Camera';
+
+    return `
+      <div class="camera-card" id="cam-card-${camId}">
+        <div class="camera-header">
+          <div class="camera-title-wrap">
+            <span class="live-dot pulse"></span>
+            <span class="camera-name">${camName}</span>
+            <span class="camera-tag">${locationId}</span>
           </div>
-        `;
-      }
-      return;
-    }
+          <button class="live-stream-btn" onclick="toggleLiveHls('${locationId}', '${camId}')">
+            Watch Live Feed
+          </button>
+        </div>
 
-    let currentMode = 'snapshots';
-    let activeHlsInstances = [];
-    let snapshotInterval = null;
+        <!-- 4-Snapshot Quad View (Fills allocated container) -->
+        <div class="camera-quad-grid" id="quad-${camId}">
+          ${[0, 1, 2, 3].map(idx => `
+            <div class="quad-item quad-item-${idx}" onclick="handleSnapshotClick('${locationId}', '${camId}', ${idx})">
+              <img 
+                id="snap-${camId}-${idx}" 
+                src="/api/snapshot/latest?cam=${camId}&location=${locationId}&index=${idx}&t=${Date.now()}" 
+                alt="${camName} Snapshot ${idx + 1}"
+                loading="eager"
+              />
+              <div class="quad-badge">${idx === 0 ? 'Live Stills' : `#${idx + 1}`}</div>
+              <div class="quad-play-overlay">
+                <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+                <span>Play Clip</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
 
-    // Set default grid columns
-    if (cameras.length > 4) setGrid(3);
-    else if (cameras.length > 1) setGrid(2);
-    else setGrid(1);
+        <!-- Video Player Modal Container (Hidden by default) -->
+        <div class="video-container" id="video-wrap-${camId}" style="display: none;">
+          <video id="player-${camId}" controls playsinline preload="none"></video>
+          <button class="close-video-btn" onclick="closeVideoPlayer('${camId}')">&times;</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
 
-    // Initial render
-    renderView();
+// ------------------------------------------------------------
+// NEAR REAL-TIME POLLING FOR LATEST SNAPSHOTS
+// ------------------------------------------------------------
+function startSnapshotPolling(locationId, cameras) {
+  if (activePollTimer) clearInterval(activePollTimer);
 
-    if (btnModeSnapshots) {
-      btnModeSnapshots.addEventListener('click', () => {
-        if (currentMode === 'snapshots') return;
-        currentMode = 'snapshots';
-        btnModeSnapshots.classList.add('active');
-        if (btnModeLive) btnModeLive.classList.remove('active');
-        renderView();
-      });
-    }
-
-    if (btnModeLive) {
-      btnModeLive.addEventListener('click', () => {
-        if (currentMode === 'live') return;
-        currentMode = 'live';
-        btnModeLive.classList.add('active');
-        if (btnModeSnapshots) btnModeSnapshots.classList.remove('active');
-        renderView();
-      });
-    }
-
-    function renderView() {
-      // Clean up previous video instances and intervals
-      activeHlsInstances.forEach(hls => { try { hls.destroy(); } catch {} });
-      activeHlsInstances = [];
-      if (snapshotInterval) {
-        clearInterval(snapshotInterval);
-        snapshotInterval = null;
-      }
-
-      if (!cameraGrid) return;
-      cameraGrid.innerHTML = '';
-
-      cameras.forEach((cam, index) => {
-        const tile = document.createElement('div');
-        tile.className = 'camera-tile';
-        tile.id = `tile-${cam.camera_id}`;
-
-        tile.innerHTML = `
-          <div class="camera-tile-header">
-            <span class="cam-status-dot ${currentMode === 'snapshots' ? 'snapshot-dot' : ''}"></span>
-            <span class="cam-name">${escapeHtml(cam.name || cam.camera_id)} (${escapeHtml(cam.camera_id)})</span>
-            <span class="cam-mode-tag">${currentMode === 'snapshots' ? 'Snapshot' : 'Live'}</span>
-            <button type="button" class="fullscreen-tile-btn" title="Toggle Fullscreen">⛶</button>
-          </div>
-          <div class="video-container" id="media-box-${index}"></div>
-        `;
-
-        cameraGrid.appendChild(tile);
-
-        const box = tile.querySelector(`#media-box-${index}`);
-
-        if (currentMode === 'snapshots') {
-          const img = document.createElement('img');
-          img.className = 'snapshot-img';
-          img.alt = `${cam.name} Snapshot`;
-          // Requests snapshot using camera name
-          img.src = `/api/snapshot/latest?location=${encodeURIComponent(user.locationId)}&cam=${encodeURIComponent(cam.name || cam.camera_id)}&_t=${Date.now()}`;
-          img.style.cursor = 'pointer';
-          img.title = 'Click to switch to live feed';
-          img.addEventListener('click', () => {
-            if (btnModeLive) btnModeLive.click();
-          });
-          box.appendChild(img);
-        } else {
-          const video = document.createElement('video');
-          video.playsInline = true;
-          video.autoplay = true;
-          video.muted = true;
-          box.appendChild(video);
-
-          const streamUrl = `https://stream.aisys.cam/${user.locationId}/live/${cam.name}/index.m3u8`;
-          mountHlsPlayer(video, streamUrl);
+  activePollTimer = setInterval(() => {
+    const timestamp = Date.now();
+    cameras.forEach(cam => {
+      const camId = (cam.camera_id || cam.name || 'apcam').toLowerCase();
+      
+      // Update each of the 4 snapshot quadrants with cache-busting timestamp
+      for (let idx = 0; idx < 4; idx++) {
+        const img = document.getElementById(`snap-${camId}-${idx}`);
+        if (img) {
+          const nextSrc = `/api/snapshot/latest?cam=${camId}&location=${locationId}&index=${idx}&t=${timestamp}`;
+          // Preload to eliminate flicker
+          const preload = new Image();
+          preload.src = nextSrc;
+          preload.onload = () => { img.src = nextSrc; };
         }
-
-        const fsBtn = tile.querySelector('.fullscreen-tile-btn');
-        if (fsBtn) {
-          fsBtn.addEventListener('click', () => {
-            if (!document.fullscreenElement) tile.requestFullscreen().catch(() => {});
-            else document.exitFullscreen().catch(() => {});
-          });
-        }
-      });
-
-      // Poll snapshots every 5 seconds
-      if (currentMode === 'snapshots') {
-        snapshotInterval = setInterval(() => {
-          cameras.forEach((cam, index) => {
-            const img = document.querySelector(`#media-box-${index} .snapshot-img`);
-            if (img) {
-              img.src = `/api/snapshot/latest?location=${encodeURIComponent(user.locationId)}&cam=${encodeURIComponent(cam.name || cam.camera_id)}&_t=${Date.now()}`;
-            }
-          });
-        }, 5000);
       }
-    }
-
-    function mountHlsPlayer(videoElement, hlsUrl) {
-      if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-        const hls = new Hls({
-          lowLatencyMode: true,
-          backBufferLength: 0,
-          liveSyncDurationCount: 2,
-          liveMaxLatencyDurationCount: 4
-        });
-        hls.loadSource(hlsUrl);
-        hls.attachMedia(videoElement);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => videoElement.play().catch(() => {}));
-        activeHlsInstances.push(hls);
-      } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-        videoElement.src = hlsUrl;
-        videoElement.play().catch(() => {});
-      }
-    }
-
-    document.querySelectorAll('.grid-btn').forEach(btn => {
-      btn.addEventListener('click', () => setGrid(parseInt(btn.dataset.grid, 10)));
     });
+  }, POLL_INTERVAL_MS);
+}
 
-    function setGrid(columns) {
-      if (!cameraGrid) return;
-      cameraGrid.className = `camera-grid grid-${columns}`;
-      document.querySelectorAll('.grid-btn').forEach(b => {
-        b.classList.toggle('active', parseInt(b.dataset.grid, 10) === columns);
-      });
+// ------------------------------------------------------------
+// ON-DEMAND VIDEO CLIP RETRIEVAL ON SNAPSHOT CLICK
+// ------------------------------------------------------------
+async function handleSnapshotClick(locationId, camId, index) {
+  const statusBadge = document.querySelector(`#cam-card-${camId} .quad-badge`);
+  if (statusBadge) statusBadge.innerText = 'Requesting Clip...';
+
+  try {
+    // 1. Fetch metadata of the clicked snapshot to get its filename
+    const metaRes = await fetch(`/api/snapshot/latest?cam=${camId}&location=${locationId}&index=${index}&json=1`);
+    const meta = await metaRes.json();
+
+    if (!meta || !meta.key) {
+      alert('Snapshot key unavailable.');
+      return;
     }
+
+    // Convert snapshot name to matching motion clip filename (e.g. 20261105_103000.mp4)
+    const baseName = meta.key.split('/').pop().replace(/\.(jpe?g|png)$/i, '');
+    const mp4Name = `${baseName}_motion.mp4`;
+
+    // 2. Notify Cloudflare and the local Windows watcher to pull the 10s video
+    const reqRes = await fetch(`/api/motion/request?location=${locationId}&cam=${camId}&file=${encodeURIComponent(mp4Name)}`);
+    const reqData = await reqRes.json();
+
+    pollMotionReady(locationId, camId, mp4Name);
+
+  } catch (err) {
+    console.error('Failed to request motion video:', err);
+    if (statusBadge) statusBadge.innerText = 'Error';
+  }
+}
+
+// Polls until the Windows watcher completes transferring the 10s MP4 to R2
+function pollMotionReady(locationId, camId, mp4Name) {
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const res = await fetch(`/api/motion/status?location=${locationId}&cam=${camId}&file=${encodeURIComponent(mp4Name)}`);
+      const data = await res.json();
+
+      if (data.status === 'ready' || attempts >= 8) {
+        clearInterval(poll);
+        playMotionVideo(camId, `/api/motion/latest?location=${locationId}&cam=${camId}&t=${Date.now()}`);
+      }
+    } catch (e) {
+      clearInterval(poll);
+    }
+  }, 1000);
+}
+
+function playMotionVideo(camId, videoUrl) {
+  const quadGrid = document.getElementById(`quad-${camId}`);
+  const videoWrap = document.getElementById(`video-wrap-${camId}`);
+  const player = document.getElementById(`player-${camId}`);
+
+  if (quadGrid && videoWrap && player) {
+    quadGrid.style.display = 'none';
+    videoWrap.style.display = 'block';
+    player.src = videoUrl;
+    player.play().catch(() => {});
+  }
+}
+
+function closeVideoPlayer(camId) {
+  const quadGrid = document.getElementById(`quad-${camId}`);
+  const videoWrap = document.getElementById(`video-wrap-${camId}`);
+  const player = document.getElementById(`player-${camId}`);
+
+  if (quadGrid && videoWrap && player) {
+    player.pause();
+    player.src = '';
+    videoWrap.style.display = 'none';
+    quadGrid.style.display = 'grid';
+  }
+}
+
+function toggleLiveHls(locationId, camId) {
+  const videoWrap = document.getElementById(`video-wrap-${camId}`);
+  const quadGrid = document.getElementById(`quad-${camId}`);
+  const player = document.getElementById(`player-${camId}`);
+  const hlsUrl = `/live/${camId}.m3u8?location=${locationId}`;
+
+  if (videoWrap.style.display === 'block') {
+    closeVideoPlayer(camId);
+    return;
   }
 
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
+  quadGrid.style.display = 'none';
+  videoWrap.style.display = 'block';
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initLive);
+  if (player.canPlayType('application/vnd.apple.mpegurl')) {
+    player.src = hlsUrl;
+    player.play().catch(() => {});
+  } else if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls();
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(player);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => player.play());
   } else {
-    initLive();
+    alert('Live stream HLS not supported on this browser.');
   }
-})();
+}
