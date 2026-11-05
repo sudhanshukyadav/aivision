@@ -188,7 +188,7 @@ export default {
         headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
         headers.set('ETag', object.httpEtag);
         headers.set('X-AISYS-Matched-Key', latestKey);
-        headers.set('Access-Control-Allow-Origin': '*');
+        headers.set('Access-Control-Allow-Origin', '*');
 
         return new Response(object.body, { headers });
       }
