@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<link rel="stylesheet" href="/styles.css?v=2" />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AISYS | Live Video Operations</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <!-- HLS.js for Cloudflare Stream / HLS feeds -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body class="live-body">
+
+  <!-- Live Operations Top Bar -->
+  <header class="live-header">
+    <div class="live-header-left">
+      <a href="/" class="brand-logo">AISYS<span>.cam</span></a>
+      <div class="live-location-badge" id="locationBadge">Loading...</div>
+    </div>
+
+    <div class="live-header-center">
+      <div class="grid-controls">
+        <button type="button" class="grid-btn active" data-grid="1">1x1</button>
+        <button type="button" class="grid-btn" data-grid="2">2x2</button>
+        <button type="button" class="grid-btn" data-grid="3">3x3</button>
+      </div>
+    </div>
+
+    <div class="live-header-right">
+      <span class="user-pill" id="userPill">Operator</span>
+      <button type="button" class="nav-btn-secondary" id="logoutBtn">Sign Out</button>
+    </div>
+  </header>
+
+  <!-- Camera Stream Grid -->
+  <main class="live-viewport">
+    <div id="cameraGrid" class="camera-grid grid-1">
+      <!-- Camera tiles injected dynamically via live.js -->
+    </div>
+  </main>
+  <script src="/live.js"></script>
+  <script src="/live.js?v=2"></script>
+</body>
+</html>

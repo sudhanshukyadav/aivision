@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AISYS | Edge Vision & Autonomous Security</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+  <!-- Top Navigation Header -->
+  <header class="site-header">
+    <div class="nav-container">
+      <a href="/" class="brand-logo">AISYS<span>.cam</span></a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#waitlist">Waitlist</a>
+        <a href="#" id="securityBtn" class="nav-security-btn">Security Portal</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main>
+    <section class="hero-section">
+      <div class="hero-badge">Edge Vision Intelligence</div>
+      <h1 class="hero-title">Decentralized Video Security & Edge Telemetry</h1>
+      <p class="hero-subtitle">
+        High-throughput camera streaming with role-based access control, distributed SQLite at the edge, and zero-latency operational monitoring.
+      </p>
+
+      <!-- Waitlist Signup Form -->
+      <form id="waitlistForm" class="waitlist-form">
+        <input 
+          type="email" 
+          id="waitlistEmail" 
+          placeholder="Enter your corporate email..." 
+          required 
+          autocomplete="email"
+        />
+        <button type="submit" id="waitlistSubmitBtn">Request Access</button>
+      </form>
+      <div id="waitlistMsg" class="form-msg"></div>
+    </section>
+
+    <!-- Features Overview -->
+    <section id="features" class="features-section">
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Edge Native</h3>
+          <p>Global multi-region D1 database replication ensures millisecond credential authentication and live stream routing.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🛡️</div>
+          <h3>Role-Based Scope</h3>
+          <p>Superusers manage local viewer permissions, while operators access authorized camera streams per facility.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🏢</div>
+          <h3>Multi-Facility</h3>
+          <p>Autonomous location-code onboarding lets staff register instantly while keeping location feeds isolated.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Security Login Modal Popup -->
+  <div id="securityModal" class="modal-overlay" aria-hidden="true" role="dialog">
+    <div class="modal-box">
+      <button type="button" class="modal-close" id="modalClose">&times;</button>
+      <div class="modal-header">
+        <span class="modal-badge">Access Control</span>
+        <h2>Security Portal</h2>
+        <p>Authenticate with your location code and operator ID.</p>
+      </div>
+
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="locationId">Location Code</label>
+          <input 
+            type="text" 
+            id="locationId" 
+            name="locationId" 
+            placeholder="e.g. HQ-01" 
+            required 
+            autocomplete="off" 
+            style="text-transform: uppercase;"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="username">Operator / Username</label>
+          <input 
+            type="text" 
+            id="username" 
+            name="username" 
+            placeholder="e.g. admin" 
+            required 
+            autocomplete="username"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input 
+            type="password" 
+            id="password" 
+            name="password" 
+            placeholder="••••••••" 
+            required 
+            autocomplete="current-password"
+          />
+        </div>
+
+        <div id="loginErr" class="form-error"></div>
+        <button type="submit" class="modal-submit-btn" id="loginSubmitBtn">Authenticate</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Admin Database Management Overlay -->
+  <div id="adminModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-box admin-box">
+      <button type="button" class="modal-close" id="adminModalClose">&times;</button>
+      
+      <div class="admin-topbar">
+        <div>
+          <span class="modal-badge">System Administrator</span>
+          <h2>Database Explorer</h2>
+        </div>
+        <div class="admin-tabs">
+          <button type="button" class="tab-btn active" data-table="locations">Locations</button>
+          <button type="button" class="tab-btn" data-table="cameras">Cameras</button>
+          <button type="button" class="tab-btn" data-table="users">Users</button>
+        </div>
+      </div>
+
+      <div class="admin-actions-bar">
+        <button type="button" class="action-btn" id="addRowBtn">+ Append Record</button>
+        <button type="button" class="action-btn secondary" id="refreshTablesBtn">Reload Data</button>
+      </div>
+
+      <div class="table-scroll-container">
+        <table class="admin-data-table" id="adminDataTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <!-- Drawer to Append or Update Record -->
+      <div id="recordDrawer" class="record-drawer hidden">
+        <h3 id="drawerTitle">Append Record</h3>
+        <form id="recordForm">
+          <div id="recordFormFields"></div>
+          <div class="drawer-actions">
+            <button type="submit" class="modal-submit-btn">Save Record</button>
+            <button type="button" class="modal-cancel-btn" id="cancelDrawerBtn">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 AISYS. Autonomous Camera Systems. All rights reserved.</p>
+  </footer>
+
+  <script src="/script.js"></script>
+</body>
+</html>

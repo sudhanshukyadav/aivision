@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AISYS Camera Portal</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{background:#1e293b;padding:2.5rem;border-radius:12px;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+  h1{font-size:1.4rem;margin-bottom:.3rem}
+  p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:1.5rem}
+  label{display:block;font-size:.8rem;color:#94a3b8;margin:.8rem 0 .3rem}
+  input,select{width:100%;padding:.6rem .8rem;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:.9rem}
+  button{width:100%;margin-top:1.5rem;padding:.7rem;border:none;border-radius:6px;background:#3b82f6;color:#fff;font-size:1rem;cursor:pointer}
+  button:hover{background:#2563eb}
+  .err{color:#ef4444;font-size:.8rem;margin-top:.8rem;min-height:1rem}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Industrial Camera Portal</h1>
+  <p class="sub">Sign in to access your cameras</p>
+  <form id="loginForm">
+    <label for="siteId">Site</label>
+    <select id="siteId" required><option value="">Loading sites…</option></select>
+    <label for="username">Username</label>
+    <input id="username" type="text" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Sign In</button>
+    <div class="err" id="err"></div>
+  </form>
+</div>
+<script>
+const err=document.getElementById('err');
+const siteSel=document.getElementById('siteId');
+fetch('/api/sites').then(r=>r.json()).then(d=>{
+  siteSel.innerHTML=d.sites.map(s=>'<option value="'+s.siteId+'">'+s.siteId+(s.location?' — '+s.location:'')+'</option>').join('');
+}).catch(()=>{siteSel.innerHTML='<option value="">Failed to load sites</option>';});
+document.getElementById('loginForm').addEventListener('submit',async e=>{
+  e.preventDefault();
+  err.textContent='';
+  const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    siteId:siteSel.value,username:document.getElementById('username').value,password:document.getElementById('password').value
+  })});
+  if(res.ok){window.location.href='/dashboard';}
+  else{const d=await res.json().catch(()=>({}));err.textContent=d.error||'Login failed';}
+});
+</script>
+</body>
+</html>
