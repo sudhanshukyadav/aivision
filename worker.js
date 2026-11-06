@@ -93,7 +93,7 @@ export default {
           });
         }
 
-        // 2. Not in R2: Drop on-demand upload request ticket for r2_watcher.py
+        // 2. Not in R2: Drop request ticket marker for r2_watcher.py
         const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
         await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
           httpMetadata: { contentType: 'application/json' }
