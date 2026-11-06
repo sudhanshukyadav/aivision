@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AISYS Industrial Camera Portal</title>
+<title>AISYS Industrial Camera Portal - Login</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -99,26 +99,18 @@ const locInput = document.getElementById('locationId');
 const userInput = document.getElementById('username');
 const passInput = document.getElementById('password');
 
-// Force inputs to default values directly
 function applyDefaults() {
   locInput.value = DEFAULT_LOC;
   userInput.value = DEFAULT_USER;
   passInput.value = DEFAULT_PASS;
 }
 
-// 1. Run immediately on script load
+// Ensure defaults are populated across all load/cache lifecycles
 applyDefaults();
-
-// 2. Run on DOM ready
 document.addEventListener('DOMContentLoaded', applyDefaults);
-
-// 3. Run on pageshow (handles browser back-navigation and Bfcache restoration)
 window.addEventListener('pageshow', applyDefaults);
-
-// 4. Zero-delay timeout to override any browser autofill wiping
 setTimeout(applyDefaults, 50);
 
-// Handle form submission
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   err.textContent = '';
@@ -141,6 +133,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     const data = await res.json().catch(() => ({}));
 
     if (res.ok && (data.status === 'success' || data.success)) {
+      // Store session data for live.html
       localStorage.setItem('aisys_session', JSON.stringify({
         token: data.token,
         locationId: data.user.locationId,
