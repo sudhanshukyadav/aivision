@@ -24,16 +24,8 @@
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
     border: 1px solid #1e293b;
   }
-  h1 {
-    font-size: 1.35rem;
-    margin-bottom: 0.25rem;
-    color: #f8fafc;
-  }
-  p.sub {
-    color: #94a3b8;
-    font-size: 0.85rem;
-    margin-bottom: 1.5rem;
-  }
+  h1 { font-size: 1.35rem; margin-bottom: 0.25rem; color: #f8fafc; }
+  p.sub { color: #94a3b8; font-size: 0.85rem; margin-bottom: 1.5rem; }
   label {
     display: block;
     font-size: 0.75rem;
@@ -52,10 +44,7 @@
     color: #f8fafc;
     font-size: 0.95rem;
   }
-  input:focus {
-    outline: none;
-    border-color: #38bdf8;
-  }
+  input:focus { outline: none; border-color: #38bdf8; }
   button {
     width: 100%;
     margin-top: 1.6rem;
@@ -69,13 +58,8 @@
     cursor: pointer;
     transition: background 0.2s;
   }
-  button:hover {
-    background: #0369a1;
-  }
-  button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
+  button:hover { background: #0369a1; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
   .err {
     color: #f87171;
     font-size: 0.85rem;
@@ -107,30 +91,48 @@
 <script>
 const err = document.getElementById('err');
 const btn = document.getElementById('submitBtn');
+const locInput = document.getElementById('locationId');
+const userInput = document.getElementById('username');
+const passInput = document.getElementById('password');
 
+// 1. Restore previous credentials from localStorage if available, otherwise keep defaults
+window.addEventListener('DOMContentLoaded', () => {
+  const savedLoc = localStorage.getItem('aisys_saved_loc');
+  const savedUser = localStorage.getItem('aisys_saved_user');
+  const savedPass = localStorage.getItem('aisys_saved_pass');
+
+  if (savedLoc) locInput.value = savedLoc;
+  if (savedUser) userInput.value = savedUser;
+  if (savedPass) passInput.value = savedPass;
+});
+
+// 2. Handle Login Submission
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   err.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Authenticating...';
 
-  const payload = {
-    locationId: document.getElementById('locationId').value.trim().toUpperCase(),
-    username: document.getElementById('username').value.trim(),
-    password: document.getElementById('password').value
-  };
+  const locationId = locInput.value.trim().toUpperCase();
+  const username = userInput.value.trim();
+  const password = passInput.value;
+
+  // Persist values locally so you never have to re-enter them
+  localStorage.setItem('aisys_saved_loc', locationId);
+  localStorage.setItem('aisys_saved_user', username);
+  localStorage.setItem('aisys_saved_pass', password);
 
   try {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ locationId, username, password })
     });
 
     const data = await res.json().catch(() => ({}));
 
     if (res.ok && (data.status === 'success' || data.success)) {
-      // Save full verified session to localStorage
+      // Store session data for live.html
       localStorage.setItem('aisys_session', JSON.stringify({
         token: data.token,
         locationId: data.user.locationId,
@@ -139,7 +141,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         cameras: data.user.cameras
       }));
 
-      // Direct redirection to the live grid
+      // Navigate to live dashboard
       window.location.href = '/live.html';
     } else {
       err.textContent = data.error || 'Authentication failed. Check credentials.';
