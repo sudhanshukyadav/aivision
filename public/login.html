@@ -3,49 +3,175 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AISYS Camera Portal</title>
+<title>AISYS Industrial Camera Portal</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh}
-  .card{background:#1e293b;padding:2.5rem;border-radius:12px;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.4)}
-  h1{font-size:1.4rem;margin-bottom:.3rem}
-  p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:1.5rem}
-  label{display:block;font-size:.8rem;color:#94a3b8;margin:.8rem 0 .3rem}
-  input,select{width:100%;padding:.6rem .8rem;border:1px solid #334155;border-radius:6px;background:#0f172a;color:#e2e8f0;font-size:.9rem}
-  button{width:100%;margin-top:1.5rem;padding:.7rem;border:none;border-radius:6px;background:#3b82f6;color:#fff;font-size:1rem;cursor:pointer}
-  button:hover{background:#2563eb}
-  .err{color:#ef4444;font-size:.8rem;margin-top:.8rem;min-height:1rem}
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0b0f19;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #151c2e;
+    padding: 2.5rem;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    border: 1px solid #1e293b;
+  }
+  h1 {
+    font-size: 1.35rem;
+    margin-bottom: 0.25rem;
+    color: #f8fafc;
+  }
+  p.sub {
+    color: #94a3b8;
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+  }
+  label {
+    display: block;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin: 1rem 0 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+  input, select {
+    width: 100%;
+    padding: 0.65rem 0.8rem;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #0b0f19;
+    color: #f8fafc;
+    font-size: 0.95rem;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: #38bdf8;
+  }
+  button {
+    width: 100%;
+    margin-top: 1.6rem;
+    padding: 0.75rem;
+    border: none;
+    border-radius: 6px;
+    background: #0284c7;
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  button:hover {
+    background: #0369a1;
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .err {
+    color: #f87171;
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    min-height: 1.2rem;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Industrial Camera Portal</h1>
-  <p class="sub">Sign in to access your cameras</p>
+  <p class="sub">Sign in to access your camera feeds</p>
   <form id="loginForm">
-    <label for="siteId">Site</label>
-    <select id="siteId" required><option value="">Loading sites…</option></select>
+    <label for="siteId">Site / Location ID</label>
+    <select id="siteId" required>
+      <option value="">Loading locations…</option>
+    </select>
+
     <label for="username">Username</label>
-    <input id="username" type="text" autocomplete="username" required>
+    <input id="username" type="text" placeholder="Username" autocomplete="username" required>
+
     <label for="password">Password</label>
-    <input id="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Sign In</button>
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+
+    <button type="submit" id="submitBtn">Sign In</button>
     <div class="err" id="err"></div>
   </form>
 </div>
+
 <script>
-const err=document.getElementById('err');
-const siteSel=document.getElementById('siteId');
-fetch('/api/sites').then(r=>r.json()).then(d=>{
-  siteSel.innerHTML=d.sites.map(s=>'<option value="'+s.siteId+'">'+s.siteId+(s.location?' — '+s.location:'')+'</option>').join('');
-}).catch(()=>{siteSel.innerHTML='<option value="">Failed to load sites</option>';});
-document.getElementById('loginForm').addEventListener('submit',async e=>{
+const err = document.getElementById('err');
+const siteSel = document.getElementById('siteId');
+const btn = document.getElementById('submitBtn');
+
+// 1. Fetch available location_ids from D1
+fetch('/api/sites')
+  .then(r => {
+    if (!r.ok) throw new Error('API returned status ' + r.status);
+    return r.json();
+  })
+  .then(d => {
+    if (!d.sites || d.sites.length === 0) {
+      siteSel.innerHTML = '<option value="">No locations available</option>';
+      return;
+    }
+    siteSel.innerHTML = d.sites.map(s => 
+      `<option value="${s.locationId}">${s.label || s.locationId}</option>`
+    ).join('');
+  })
+  .catch(() => {
+    // Fail-safe fallback so the user can still sign in
+    siteSel.innerHTML = '<option value="HQ-AD">HQ-AD</option>';
+  });
+
+// 2. Submit composite credentials and lock session
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  err.textContent='';
-  const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    siteId:siteSel.value,username:document.getElementById('username').value,password:document.getElementById('password').value
-  })});
-  if(res.ok){window.location.href='/dashboard';}
-  else{const d=await res.json().catch(()=>({}));err.textContent=d.error||'Login failed';}
+  err.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Authenticating...';
+
+  const locationId = siteSel.value.trim().toUpperCase();
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locationId, username, password })
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok && (data.status === 'success' || data.success)) {
+      // Lock user, role, site, and cameras into localStorage for live.js
+      localStorage.setItem('aisys_session', JSON.stringify({
+        token: data.token,
+        locationId: data.user.locationId,
+        username: data.user.username,
+        role: data.user.role,
+        cameras: data.user.cameras
+      }));
+
+      // Redirect directly to the live dashboard
+      window.location.href = '/live.html';
+    } else {
+      err.textContent = data.error || 'Authentication failed. Check credentials.';
+    }
+  } catch (ex) {
+    err.textContent = 'Server connection failed.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
 });
 </script>
 </body>
