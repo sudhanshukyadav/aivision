@@ -35,7 +35,7 @@
     }
     .back-to-landing-btn:hover { background: #334155; color: #f8fafc; }
     .page-title { font-size: 16px; font-weight: 700; color: #f8fafc; letter-spacing: 0.5px; }
-    .site-badge { font-size: 12px; color: #38bdf8; background: #1e293b; padding: 3px 10px; border-radius: 4px; border: 1px solid #334155; }
+    .site-badge { font-size: 12px; color: #38bdf8; background: #1e293b; padding: 3px 10px; border-radius: 4px; border: 1px solid #334155; font-weight: 600; }
     
     .grid-container {
       flex: 1; padding: 16px; display: grid;
@@ -62,21 +62,20 @@
     }
     .snap-wrapper img { width: 100%; height: 100%; object-fit: cover; display: block; }
     
-    /* TIMESTAMP OVERLAY ON SNAPSHOT */
     .snap-timestamp-overlay {
       position: absolute; bottom: 8px; left: 8px; right: 8px;
-      background: rgba(15, 23, 42, 0.85); color: #38bdf8;
+      background: rgba(15, 23, 42, 0.85); color: #94a3b8;
       backdrop-filter: blur(4px); border: 1px solid rgba(56, 189, 248, 0.3);
       padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 12px;
       display: flex; justify-content: space-between; align-items: center;
     }
-    .time-val { color: #f8fafc; font-weight: 600; }
+    .time-val { color: #38bdf8; font-weight: 600; }
+    .empty-notice { grid-column: 1 / -1; text-align: center; color: #64748b; padding: 40px; font-size: 14px; }
   </style>
 </head>
 <body>
   <header class="top-bar">
     <div class="bar-left">
-      <!-- Explicit Back Button Navigation to Landing Page -->
       <a href="/" class="back-to-landing-btn" title="Return to Landing Page">&larr; Home</a>
       <span class="page-title">LIVE MONITORING</span>
       <span class="site-badge" id="site-display">HQ-AD</span>
@@ -86,69 +85,94 @@
   <main class="grid-container" id="camera-grid"></main>
 
   <script>
-    // SECURITY: Prevent returning to the login page via browser back button
+    // Security: Prevent back button from opening cached login form
     if (window.history && window.history.replaceState) {
       window.history.replaceState(null, null, window.location.href);
     }
 
+    // Load & parse session safely
     const sessionRaw = localStorage.getItem('aisys_session');
     let session = {};
-    try { session = sessionRaw ? JSON.parse(sessionRaw) : {}; } catch (e) {}
-
-    // Redirect to login if session missing
-    if (!session || !session.locationId) {
-      window.location.replace('/login.html');
+    try {
+      session = sessionRaw ? JSON.parse(sessionRaw) : {};
+    } catch (e) {
+      console.error("Session parse error:", e);
     }
 
-    const LOCATION_CODE = (session.locationId || 'HQ-AD').toUpperCase();
+    const LOCATION_CODE = (session.locationId || session.location_id || 'HQ-AD').toUpperCase();
 
-    document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('site-display').textContent = session.location ? session.location.description : LOCATION_CODE;
-      loadLiveCameras();
+    document.addEventListener('DOMContentLoaded', async () => {
+      resolveLocationLabel();
+      await loadLiveCameras();
       setInterval(loadLiveCameras, 3000); // Poll live snapshots every 3 seconds
     });
 
-    function formatTimestamp(dateObj) {
+    function resolveLocationLabel() {
+      const displayElem = document.getElementById('site-display');
+      if (session.location) {
+        if (typeof session.location === 'object' && session.location.description) {
+          displayElem.textContent = session.location.description;
+          return;
+        } else if (typeof session.location === 'string') {
+          displayElem.textContent = session.location;
+          return;
+        }
+      }
+      displayElem.textContent = LOCATION_CODE;
+    }
+
+    function formatTimestamp() {
+      const d = new Date();
       const pad = n => String(n).padStart(2, '0');
-      const d = dateObj ? new Date(dateObj) : new Date();
-      const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-      const timeStr = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-      return { dateStr, timeStr };
+      return {
+        dateStr: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
+        timeStr: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+      };
     }
 
     async function loadLiveCameras() {
+      const grid = document.getElementById('camera-grid');
+      let cameras = ['gate', 'apcam']; // Default fallback camera list
+
       try {
         const res = await fetch(`/api/cameras?location=${LOCATION_CODE}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const cameras = data.cameras || ['gate', 'apcam'];
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.cameras) && data.cameras.length > 0) {
+            cameras = data.cameras;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch camera list from API, using default camera nodes:", err);
+      }
 
-        const grid = document.getElementById('camera-grid');
-        grid.innerHTML = cameras.map(cam => {
-          const now = formatTimestamp();
-          const imgUrl = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}&t=${Date.now()}`;
-          const historyUrl = `/gallery.html?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}`;
+      if (cameras.length === 0) {
+        grid.innerHTML = `<div class="empty-notice">No active camera feeds discovered for ${LOCATION_CODE}.</div>`;
+        return;
+      }
 
-          return `
-            <div class="cam-card">
-              <div class="cam-header">
-                <span class="cam-name">${cam}</span>
-                <a href="${historyUrl}" class="cam-history-btn">History</a>
-              </div>
-              <div class="snap-wrapper">
-                <img src="${imgUrl}" alt="${cam} snapshot" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100%\' height=\'100%\' viewBox=\'0 0 320 180\'><rect width=\'100%\' height=\'100%\' fill=\'%23030712\'/><text x=\'50%\' y=\'50%\' fill=\'%2364748b\' font-size=\'14\' text-anchor=\'middle\'>Camera Feed Offline</text></svg>'" />
-                <!-- TIMESTAMP OVERLAY ON SNAPSHOT -->
-                <div class="snap-timestamp-overlay">
-                  <span>${now.dateStr}</span>
-                  <span class="time-val">${now.timeStr}</span>
-                </div>
+      const now = formatTimestamp();
+
+      grid.innerHTML = cameras.map(cam => {
+        const imgUrl = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}&t=${Date.now()}`;
+        const historyUrl = `/gallery.html?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}`;
+
+        return `
+          <div class="cam-card">
+            <div class="cam-header">
+              <span class="cam-name">${cam}</span>
+              <a href="${historyUrl}" class="cam-history-btn">History</a>
+            </div>
+            <div class="snap-wrapper">
+              <img src="${imgUrl}" alt="${cam} snapshot" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100%\' height=\'100%\' viewBox=\'0 0 320 180\'><rect width=\'100%\' height=\'100%\' fill=\'%23030712\'/><text x=\'50%\' y=\'50%\' fill=\'%2364748b\' font-size=\'14\' text-anchor=\'middle\'>Camera Feed Offline</text></svg>'" />
+              <div class="snap-timestamp-overlay">
+                <span>${now.dateStr}</span>
+                <span class="time-val">${now.timeStr}</span>
               </div>
             </div>
-          `;
-        }).join('');
-      } catch (err) {
-        console.error("Error fetching live cameras:", err);
-      }
+          </div>
+        `;
+      }).join('');
     }
   </script>
 </body>
