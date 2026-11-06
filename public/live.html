@@ -84,7 +84,7 @@
     }
 
     /* ------------------------------------------------------------
-       OUTER 2x2 CAMERA GRID (Fills remaining height)
+       OUTER 2x2 CAMERA GRID
        ------------------------------------------------------------ */
     .outer-grid {
       display: grid !important;
@@ -156,7 +156,7 @@
     }
 
     /* ------------------------------------------------------------
-       INNER 2x2 FIFO SNAPSHOT QUAD (Inside Each Camera)
+       INNER 2x2 FIFO SNAPSHOT QUAD
        ------------------------------------------------------------ */
     .quad-grid {
       flex: 1;
@@ -181,7 +181,7 @@
       height: 100%;
       object-fit: cover;
       object-position: center;
-      transform: scale(1.06); /* Optical zoom to eliminate borders */
+      transform: scale(1.06);
       transition: transform 0.2s ease, filter 0.2s ease;
       display: block;
     }
@@ -223,7 +223,7 @@
     }
 
     /* ------------------------------------------------------------
-       IN-PLACE VIDEO / LIVE STREAM VIEW
+       VIDEO / STREAM CONTAINER
        ------------------------------------------------------------ */
     .video-view {
       position: absolute;
@@ -315,7 +315,7 @@
     const USER = (session && session.username) ? session.username : 'operator';
     const ROLE = (session && session.role) ? session.role.toUpperCase() : 'VIEWER';
 
-    // 2. DEFINE EXACT 4 CAMERAS FOR THE 2x2 GRID (Resolves strictly by camera name)
+    // 2. DEFINE 4 CAMERAS FOR THE 2x2 GRID
     let rawCameras = (session && Array.isArray(session.cameras) && session.cameras.length > 0)
       ? session.cameras
       : [{ name: 'apcam' }];
@@ -333,10 +333,10 @@
       startFifoPolling();
     });
 
-    // 3. RENDER THE 2x2 OUTER GRID WITH 2x2 FIFO SNAPSHOTS
+    // 3. RENDER 2x2 OUTER GRID WITH 2x2 FIFO SNAPSHOTS
     function renderGrid() {
       const outer = document.getElementById('outer-camera-grid');
-      outer.innerHTML = FOUR_CAMERAS.map((cam, camIndex) => {
+      outer.innerHTML = FOUR_CAMERAS.map((cam) => {
         const camName = cam.name.toLowerCase();
 
         return `
@@ -373,7 +373,7 @@
 
             <!-- ON-DEMAND VIDEO / LIVE STREAM VIEW -->
             <div class="video-view" id="vview-${camName}" style="display: none;">
-              <video id="vplayer-${camName}" controls playsinline></video>
+              <video id="vplayer-${camName}" controls playsinline muted preload="auto"></video>
               <button class="btn-close-vid" title="Close" onclick="closeVideo('${camName}')">&times;</button>
               <div class="vid-loading" id="vload-${camName}" style="display: none;">Requesting clip...</div>
             </div>
@@ -382,7 +382,7 @@
       }).join('');
     }
 
-    // 4. REAL-TIME FIFO SNAPSHOT POLLER (Preloads to prevent flicker)
+    // 4. FIFO REAL-TIME POLLING
     function startFifoPolling() {
       if (pollInterval) clearInterval(pollInterval);
 
@@ -392,7 +392,7 @@
           const camName = cam.name.toLowerCase();
           const vidWrap = document.getElementById(`vview-${camName}`);
 
-          // Do not overwrite display if user is actively watching a video or live stream
+          // Skip polling if the video or live player is currently open
           if (vidWrap && vidWrap.style.display === 'block') return;
 
           for (let idx = 0; idx < 4; idx++) {
@@ -408,7 +408,7 @@
       }, POLL_MS);
     }
 
-    // 5. ON-DEMAND MOTION CLIP (Triggered on click)
+    // 5. ON-DEMAND MOTION CLIP (Triggered on click, with browser autoplay fallback)
     async function handleSnapClick(camName, idx) {
       const quad = document.getElementById(`quad-${camName}`);
       const vview = document.getElementById(`vview-${camName}`);
@@ -426,7 +426,7 @@
         const base = (meta.key || '').split('/').pop().replace(/\.(jpe?g|png|webp)$/i, '');
         const mp4 = `${base}_motion.mp4`;
 
-        // Tell worker to drop the .req marker
+        // Notify edge worker to drop the .req marker
         await fetch(`/api/motion/request?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`);
 
         let attempts = 0;
@@ -441,8 +441,19 @@
             if (stData.status === 'ready' || attempts >= 8) {
               clearInterval(checkTimer);
               vload.style.display = 'none';
-              vplayer.src = `/api/motion/latest?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`;
-              vplayer.play().catch(() => {});
+
+              const clipUrl = `/api/motion/latest?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`;
+              
+              vplayer.src = clipUrl;
+              vplayer.muted = true; // Enables browser autoplay
+              vplayer.load();
+
+              const playPromise = vplayer.play();
+              if (playPromise !== undefined) {
+                playPromise.catch((err) => {
+                  console.warn('Autoplay blocked. User can click play:', err);
+                });
+              }
             }
           } catch (e) {
             clearInterval(checkTimer);
@@ -478,6 +489,7 @@
 
       if (vplayer.canPlayType('application/vnd.apple.mpegurl')) {
         vplayer.src = streamUrl;
+        vplayer.muted = true;
         vplayer.play().catch(() => {
           vload.style.display = 'flex';
           vload.textContent = 'Live stream offline.';
@@ -487,7 +499,10 @@
         const hls = new Hls();
         hls.loadSource(streamUrl);
         hls.attachMedia(vplayer);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => vplayer.play().catch(() => {}));
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          vplayer.muted = true;
+          vplayer.play().catch(() => {});
+        });
         hls.on(Hls.Events.ERROR, () => {
           vload.style.display = 'flex';
           vload.textContent = 'Live stream offline.';
@@ -505,7 +520,8 @@
 
       if (vplayer) {
         vplayer.pause();
-        vplayer.src = '';
+        vplayer.removeAttribute('src');
+        vplayer.load();
       }
       if (hlsPlayers[camName]) {
         hlsPlayers[camName].destroy();
