@@ -75,7 +75,6 @@ export default {
           });
         }
 
-        // Standardize output to clean camera names for directory paths
         const cleanCameraList = authorizedCameras.length > 0
           ? authorizedCameras.map(c => ({ name: (c.name || c.camera_id || 'apcam').trim() }))
           : [{ name: 'apcam' }];
@@ -96,7 +95,44 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 2. DIAGNOSTIC INSPECTOR: /api/r2/inspect
+      // 2. CAMERA SNAPSHOT HISTORY LISTING (/api/snapshots/list)
+      // ------------------------------------------------------------
+      if (pathname === '/api/snapshots/list' && request.method === 'GET') {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const cursor = url.searchParams.get('cursor') || undefined;
+
+        const prefix = `${loc}/snapshots/${cam}/`;
+        const list = await env.MEDIA_BUCKET.list({
+          prefix,
+          limit: 100,
+          cursor
+        });
+
+        const snaps = (list.objects || [])
+          .filter(o => o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key))
+          .map(o => ({
+            key: o.key,
+            filename: o.key.split('/').pop(),
+            size: o.size,
+            uploaded: o.uploaded
+          }));
+
+        snaps.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+
+        return jsonResponse({
+          status: 'success',
+          location: loc,
+          camera: cam,
+          count: snaps.length,
+          truncated: list.truncated,
+          cursor: list.cursor,
+          snapshots: snaps
+        });
+      }
+
+      // ------------------------------------------------------------
+      // 3. DIAGNOSTIC INSPECTOR: /api/r2/inspect
       // ------------------------------------------------------------
       if (pathname === '/api/r2/inspect' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -119,7 +155,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 3. SITES LISTING (/api/sites)
+      // 4. SITES LISTING (/api/sites)
       // ------------------------------------------------------------
       if (pathname === '/api/sites' && request.method === 'GET') {
         const rows = await env.DB.prepare(
@@ -135,7 +171,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 4. LIVE HLS STREAMING (/live/:file)
+      // 5. LIVE HLS STREAMING (/live/:file)
       // ------------------------------------------------------------
       if (pathname.startsWith('/live/')) {
         let rawFile = pathname.replace(/^\/live\//, '');
@@ -174,7 +210,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 5. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
+      // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
         const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
@@ -225,7 +261,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 6. MOTION VIDEO STREAMING WITH BYTE RANGE (/api/motion/latest)
+      // 7. MOTION VIDEO STREAMING WITH BYTE RANGE (/api/motion/latest)
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -278,7 +314,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 7. STATIC SPA SERVING
+      // 8. STATIC SPA SERVING
       // ------------------------------------------------------------
       if (env.ASSETS) {
         let response = await env.ASSETS.fetch(request);
@@ -300,10 +336,6 @@ export default {
     }
   }
 };
-
-// ------------------------------------------------------------
-// HELPERS
-// ------------------------------------------------------------
 
 async function verifyPassword(inputPassword, storedHash) {
   if (!inputPassword || !storedHash) return false;
