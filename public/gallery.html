@@ -19,6 +19,7 @@
       flex-direction: column;
     }
 
+    /* TOP HEADER BAR */
     .top-bar {
       height: 52px;
       background: #0f172a;
@@ -26,7 +27,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 20px;
+      padding: 0 16px;
       position: sticky;
       top: 0;
       z-index: 50;
@@ -36,52 +37,143 @@
       align-items: center;
       gap: 12px;
     }
-    .back-btn {
-      background: #1e293b;
-      color: #38bdf8;
-      border: 1px solid #334155;
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 13px;
-      text-decoration: none;
-      font-weight: 500;
-      transition: background 0.2s;
-    }
-    .back-btn:hover {
-      background: #334155;
-    }
     .cam-title {
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 700;
       color: #f8fafc;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
     }
-    .cam-meta {
+    .site-full-name {
       font-size: 12px;
-      color: #94a3b8;
+      color: #38bdf8;
       background: #1e293b;
-      padding: 3px 8px;
+      padding: 3px 10px;
       border-radius: 4px;
       border: 1px solid #334155;
-    }
-    .count-badge {
-      font-size: 13px;
-      color: #38bdf8;
       font-weight: 500;
     }
+    .back-btn-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      background: #1e293b;
+      color: #38bdf8;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      font-size: 16px;
+      text-decoration: none;
+      font-weight: bold;
+      transition: background 0.2s, color 0.2s;
+    }
+    .back-btn-icon:hover {
+      background: #334155;
+      color: #f8fafc;
+    }
 
+    .bar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .filter-btn {
+      background: #1e293b;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .filter-btn:hover {
+      background: #334155;
+      border-color: #38bdf8;
+    }
+    .filter-btn.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+    }
+    .count-badge {
+      font-size: 12px;
+      color: #94a3b8;
+      font-family: monospace;
+    }
+
+    /* DATE PICKER DROPDOWN POPOVER */
+    .filter-popover {
+      display: none;
+      position: absolute;
+      top: 58px;
+      right: 16px;
+      background: #151c2e;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.7);
+      z-index: 60;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .filter-popover label {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #94a3b8;
+      font-weight: 600;
+    }
+    .filter-popover input[type="date"] {
+      background: #0b0f19;
+      color: #f8fafc;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 13px;
+      color-scheme: dark;
+    }
+    .filter-popover-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .pop-btn {
+      flex: 1;
+      padding: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+    }
+    .pop-btn-apply {
+      background: #0284c7;
+      color: #fff;
+    }
+    .pop-btn-clear {
+      background: #334155;
+      color: #94a3b8;
+    }
+
+    /* THUMBNAIL GRID */
     .gallery-container {
       flex: 1;
-      padding: 16px;
+      padding: 12px;
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 10px;
       align-content: start;
     }
 
     .thumb-card {
       background: #111827;
       border: 1px solid #1f2937;
-      border-radius: 8px;
+      border-radius: 6px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -104,28 +196,31 @@
       height: 100%;
       object-fit: cover;
       display: block;
-      loading: lazy;
     }
+
+    /* COMPACT SINGLE-LINE METADATA FOOTER */
     .thumb-info {
-      padding: 8px 10px;
+      padding: 6px 8px;
       background: #0f172a;
       border-top: 1px solid #1e293b;
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      align-items: center;
+      justify-content: space-between;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .info-date {
-      font-size: 12px;
-      font-weight: 600;
-      color: #f8fafc;
-      letter-spacing: 0.3px;
-    }
-    .info-time {
+    .info-timestamp {
       font-size: 11px;
-      color: #38bdf8;
       font-family: monospace;
+      color: #e2e8f0;
+    }
+    .info-timestamp .time-part {
+      color: #38bdf8;
+      margin-left: 4px;
     }
 
+    /* FULLSCREEN VIEWER MODAL */
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -173,6 +268,7 @@
       font-size: 14px;
       color: #f8fafc;
       font-weight: 500;
+      font-family: monospace;
     }
     .modal-play-btn {
       background: #0284c7;
@@ -191,7 +287,6 @@
     .modal-play-btn:hover {
       background: #0369a1;
     }
-
     .modal-video-wrap {
       display: none;
       width: 90vw;
@@ -214,7 +309,7 @@
       text-align: center;
       color: #64748b;
       margin-top: 80px;
-      font-size: 15px;
+      font-size: 14px;
     }
   </style>
 </head>
@@ -222,17 +317,46 @@
 
   <header class="top-bar">
     <div class="bar-left">
-      <a href="/live.html" class="back-btn">&larr; Live Grid</a>
-      <span class="cam-title" id="cam-header-title">Camera History</span>
-      <span class="cam-meta" id="cam-header-meta">HQ-AD</span>
+      <!-- 1. Camera Name -->
+      <span class="cam-title" id="cam-header-title">CAMERA</span>
+
+      <!-- 2. Full Site Description from Database -->
+      <span class="site-full-name" id="site-header-name">Loading Site…</span>
+
+      <!-- 3. Return Arrow Icon -->
+      <a href="/live.html" class="back-btn-icon" title="Return to Live Grid">&larr;</a>
     </div>
-    <div class="count-badge" id="snap-count">Loading…</div>
+
+    <div class="bar-right">
+      <button class="filter-btn" id="toggle-filter-btn" onclick="toggleDateFilterPopover()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="16" y1="2" x2="16" y2="6"></line>
+          <line x1="8" y1="2" x2="8" y2="6"></line>
+          <line x1="3" y1="10" x2="21" y2="10"></line>
+        </svg>
+        <span id="filter-btn-label">Filter Date</span>
+      </button>
+
+      <!-- Date Filter Popover -->
+      <div class="filter-popover" id="date-filter-popover">
+        <label for="filter-date-input">Select Date</label>
+        <input type="date" id="filter-date-input">
+        <div class="filter-popover-actions">
+          <button class="pop-btn pop-btn-apply" onclick="applyDateFilter()">Apply</button>
+          <button class="pop-btn pop-btn-clear" onclick="clearDateFilter()">Clear</button>
+        </div>
+      </div>
+
+      <div class="count-badge" id="snap-count">--</div>
+    </div>
   </header>
 
   <main class="gallery-container" id="gallery-grid">
     <!-- Populated dynamically -->
   </main>
 
+  <!-- Fullscreen Modal Viewer -->
   <div class="modal-overlay" id="viewer-modal">
     <button class="modal-close" onclick="closeModal()">&times;</button>
     <img id="modal-img" class="modal-image" src="" alt="Fullscreen Still" />
@@ -253,19 +377,58 @@
   <script>
     const params = new URLSearchParams(window.location.search);
     const sessionRaw = localStorage.getItem('aisys_session');
-    const session = sessionRaw ? JSON.parse(sessionRaw) : {};
+    let session = {};
+    try {
+      session = sessionRaw ? JSON.parse(sessionRaw) : {};
+    } catch (e) {
+      session = {};
+    }
 
-    const LOCATION = (params.get('location') || session.locationId || 'HQ-AD').toUpperCase();
+    const LOCATION_CODE = (params.get('location') || session.locationId || 'HQ-AD').toUpperCase();
     const CAMERA = (params.get('cam') || 'apcam').toLowerCase();
 
+    let allSnapshots = [];
+    let currentFilterDate = null;
     let currentSelectedSnap = null;
 
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('cam-header-title').textContent = CAMERA.toUpperCase();
-      document.getElementById('cam-header-meta').textContent = LOCATION;
-      loadCameraSnapshots();
+      
+      // Resolve site description directly from D1 / Database
+      await resolveSiteDescription();
+      
+      // Load all snapshots
+      await loadCameraSnapshots();
     });
 
+    // 1. Fetch Location Description from Database
+    async function resolveSiteDescription() {
+      const siteBadge = document.getElementById('site-header-name');
+      
+      // Check stored session first
+      if (session.location && session.location.description) {
+        siteBadge.textContent = session.location.description;
+        return;
+      }
+
+      // Fetch dynamic sites list from worker API
+      try {
+        const res = await fetch('/api/sites');
+        if (res.ok) {
+          const data = await res.json();
+          const match = (data.sites || []).find(s => s.locationId.toUpperCase() === LOCATION_CODE);
+          if (match && match.label) {
+            const desc = match.label.includes('—') ? match.label.split('—')[1].trim() : match.label;
+            siteBadge.textContent = desc;
+            return;
+          }
+        }
+      } catch (e) {}
+
+      siteBadge.textContent = LOCATION_CODE;
+    }
+
+    // 2. Format ISO uploaded date to single-line parts
     function formatDateTime(dateObj) {
       const year = dateObj.getFullYear();
       const month = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -275,52 +438,104 @@
       const seconds = String(dateObj.getSeconds()).padStart(2, '0');
 
       return {
-        date: `${year}-${month}-${day}`,
-        time: `${hours}:${minutes}:${seconds}`
+        dateStr: `${year}-${month}-${day}`,
+        timeStr: `${hours}:${minutes}:${seconds}`,
+        singleLine: `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
       };
     }
 
+    // 3. Fetch all snapshots for camera from Edge API
     async function loadCameraSnapshots() {
-      const grid = document.getElementById('gallery-grid');
       const countEl = document.getElementById('snap-count');
 
       try {
-        const res = await fetch(`/api/snapshots/list?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}`);
+        const res = await fetch(`/api/snapshots/list?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}`);
         if (!res.ok) throw new Error('API returned ' + res.status);
         const data = await res.json();
 
-        const snaps = data.snapshots || [];
-        countEl.textContent = `${snaps.length} Total Snapshots`;
-
-        if (snaps.length === 0) {
-          grid.innerHTML = `<div class="empty-state">No snapshots found for ${CAMERA} at ${LOCATION}.</div>`;
-          return;
-        }
-
-        grid.innerHTML = snaps.map((s, idx) => {
-          const dateObj = new Date(s.uploaded);
-          const dt = formatDateTime(dateObj);
-          const imgUrl = `/api/snapshot/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&index=${idx}`;
-
-          return `
-            <div class="thumb-card" onclick="openModal('${s.filename}', '${s.uploaded}', ${idx})">
-              <div class="thumb-wrapper">
-                <img src="${imgUrl}" alt="${s.filename}" loading="lazy" />
-              </div>
-              <div class="thumb-info">
-                <span class="info-date">${dt.date}</span>
-                <span class="info-time">${dt.time}</span>
-              </div>
-            </div>
-          `;
-        }).join('');
+        allSnapshots = data.snapshots || [];
+        renderSnapshotsGrid();
 
       } catch (err) {
-        countEl.textContent = 'Error loading history';
-        grid.innerHTML = `<div class="empty-state">Failed to connect to storage: ${err.message}</div>`;
+        countEl.textContent = 'Err';
+        document.getElementById('gallery-grid').innerHTML = 
+          `<div class="empty-state">Failed to connect to storage: ${err.message}</div>`;
       }
     }
 
+    // 4. Render Grid with Date Filter & Single-Line Timestamps
+    function renderSnapshotsGrid() {
+      const grid = document.getElementById('gallery-grid');
+      const countEl = document.getElementById('snap-count');
+
+      let filtered = allSnapshots;
+      if (currentFilterDate) {
+        filtered = allSnapshots.filter(s => {
+          const d = new Date(s.uploaded);
+          return formatDateTime(d).dateStr === currentFilterDate;
+        });
+      }
+
+      countEl.textContent = `${filtered.length} Snaps`;
+
+      if (filtered.length === 0) {
+        grid.innerHTML = `<div class="empty-state">No snapshots found for ${currentFilterDate || 'this camera'}.</div>`;
+        return;
+      }
+
+      grid.innerHTML = filtered.map((s, idx) => {
+        const dateObj = new Date(s.uploaded);
+        const dt = formatDateTime(dateObj);
+        const imgUrl = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&index=${idx}`;
+
+        return `
+          <div class="thumb-card" onclick="openModal('${s.filename}', '${s.uploaded}', ${idx})">
+            <div class="thumb-wrapper">
+              <img src="${imgUrl}" alt="${s.filename}" loading="lazy" />
+            </div>
+            <!-- SINGLE-LINE COMPACT TIMESTAMP -->
+            <div class="thumb-info">
+              <span class="info-timestamp">${dt.dateStr}<span class="time-part">${dt.timeStr}</span></span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 5. Date Filter Controls
+    function toggleDateFilterPopover() {
+      const popover = document.getElementById('date-filter-popover');
+      popover.style.display = popover.style.display === 'flex' ? 'none' : 'flex';
+    }
+
+    function applyDateFilter() {
+      const input = document.getElementById('filter-date-input');
+      const btn = document.getElementById('toggle-filter-btn');
+      const label = document.getElementById('filter-btn-label');
+
+      if (!input.value) return;
+
+      currentFilterDate = input.value;
+      label.textContent = currentFilterDate;
+      btn.classList.add('active');
+      toggleDateFilterPopover();
+      renderSnapshotsGrid();
+    }
+
+    function clearDateFilter() {
+      const input = document.getElementById('filter-date-input');
+      const btn = document.getElementById('toggle-filter-btn');
+      const label = document.getElementById('filter-btn-label');
+
+      input.value = '';
+      currentFilterDate = null;
+      label.textContent = 'Filter Date';
+      btn.classList.remove('active');
+      toggleDateFilterPopover();
+      renderSnapshotsGrid();
+    }
+
+    // 6. Modal Fullscreen Viewer
     function openModal(filename, uploadedStr, index) {
       currentSelectedSnap = { filename, uploadedStr, index };
       const dt = formatDateTime(new Date(uploadedStr));
@@ -335,8 +550,8 @@
       vidWrap.style.display = 'none';
       playBtn.style.display = 'flex';
 
-      modalImg.src = `/api/snapshot/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&index=${index}`;
-      timeLabel.textContent = `${dt.date}  ${dt.time}`;
+      modalImg.src = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&index=${index}`;
+      timeLabel.textContent = dt.singleLine;
       modal.style.display = 'flex';
     }
 
@@ -354,7 +569,7 @@
       playBtn.style.display = 'none';
       vidWrap.style.display = 'block';
 
-      vidPlayer.src = `/api/motion/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      vidPlayer.src = `/api/motion/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
       vidPlayer.muted = true;
       vidPlayer.play().catch(() => {});
     }
