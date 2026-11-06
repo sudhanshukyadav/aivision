@@ -9,7 +9,7 @@ export default {
 
     try {
       // ------------------------------------------------------------
-      // 1. STRICT COMPOSITE AUTHENTICATION: (location_id + username)
+      // 1. COMPOSITE AUTHENTICATION: (location_id + username)
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
@@ -132,7 +132,79 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 3. DIAGNOSTIC INSPECTOR: /api/r2/inspect
+      // 3. ON-DEMAND MOTION REQUEST TICKET (/api/motion/request)
+      // Drops .req file in R2 for r2_watcher.py to pick up and upload
+      // ------------------------------------------------------------
+      if (pathname === '/api/motion/request' && (request.method === 'POST' || request.method === 'GET')) {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
+        let file = (url.searchParams.get('file') || '').trim();
+
+        if (!file) {
+          return jsonResponse({ error: 'Parameter "file" is required.' }, 400);
+        }
+        if (!file.endsWith('.mp4')) {
+          file = `${file}.mp4`;
+        }
+
+        const videoKey = `${loc}/motion/${cameraName}/${file}`;
+
+        // Return immediately if video is already present in R2
+        const existing = await env.MEDIA_BUCKET.head(videoKey);
+        if (existing) {
+          return jsonResponse({
+            status: 'ready',
+            key: videoKey,
+            playbackUrl: `/api/motion/latest?location=${loc}&cam=${cameraName}&file=${encodeURIComponent(file)}`
+          });
+        }
+
+        // Write marker ticket into R2 for r2_watcher.py
+        const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
+        await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
+          httpMetadata: { contentType: 'application/json' }
+        });
+
+        return jsonResponse({
+          status: 'pending',
+          message: 'Video upload requested from local disk.',
+          key: videoKey,
+          marker: markerKey
+        });
+      }
+
+      // ------------------------------------------------------------
+      // 4. MOTION VIDEO STATUS CHECK (/api/motion/status)
+      // Polled by frontend while waiting for requested MP4
+      // ------------------------------------------------------------
+      if (pathname === '/api/motion/status' && request.method === 'GET') {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
+        let file = url.searchParams.get('file');
+
+        if (!file) {
+          return jsonResponse({ error: 'Parameter "file" is required.' }, 400);
+        }
+        if (!file.endsWith('.mp4')) {
+          file = `${file}.mp4`;
+        }
+
+        const videoKey = `${loc}/motion/${cameraName}/${file}`;
+        const existing = await env.MEDIA_BUCKET.head(videoKey);
+
+        if (existing) {
+          return jsonResponse({
+            status: 'ready',
+            size: existing.size,
+            key: videoKey
+          });
+        }
+
+        return jsonResponse({ status: 'transferring' });
+      }
+
+      // ------------------------------------------------------------
+      // 5. DIAGNOSTIC INSPECTOR: /api/r2/inspect
       // ------------------------------------------------------------
       if (pathname === '/api/r2/inspect' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -140,22 +212,25 @@ export default {
 
         const motionPrefix = `${loc}/motion/${cam}/`;
         const snapPrefix = `${loc}/snapshots/${cam}/`;
+        const reqPrefix = `${loc}/requests/`;
 
-        const [motionList, snapList] = await Promise.all([
+        const [motionList, snapList, reqList] = await Promise.all([
           env.MEDIA_BUCKET.list({ prefix: motionPrefix, limit: 20 }),
-          env.MEDIA_BUCKET.list({ prefix: snapPrefix, limit: 10 })
+          env.MEDIA_BUCKET.list({ prefix: snapPrefix, limit: 10 }),
+          env.MEDIA_BUCKET.list({ prefix: reqPrefix, limit: 10 })
         ]);
 
         return jsonResponse({
           location: loc,
           camera: cam,
+          pending_requests_in_r2: (reqList.objects || []).map(o => o.key),
           motion_files: (motionList.objects || []).map(o => ({ key: o.key, size: o.size, uploaded: o.uploaded })),
           snapshot_files: (snapList.objects || []).map(o => ({ key: o.key, size: o.size, uploaded: o.uploaded }))
         });
       }
 
       // ------------------------------------------------------------
-      // 4. SITES LISTING (/api/sites)
+      // 6. SITES LISTING (/api/sites)
       // ------------------------------------------------------------
       if (pathname === '/api/sites' && request.method === 'GET') {
         const rows = await env.DB.prepare(
@@ -171,7 +246,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 5. LIVE HLS STREAMING (/live/:file)
+      // 7. LIVE HLS STREAMING (/live/:file)
       // ------------------------------------------------------------
       if (pathname.startsWith('/live/')) {
         let rawFile = pathname.replace(/^\/live\//, '');
@@ -210,7 +285,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
+      // 8. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
         const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
@@ -261,7 +336,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 7. MOTION VIDEO STREAMING WITH BYTE RANGE (/api/motion/latest)
+      // 9. MOTION VIDEO STREAMING WITH BYTE RANGE (/api/motion/latest)
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -314,7 +389,7 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 8. STATIC SPA SERVING
+      // 10. STATIC SPA SERVING
       // ------------------------------------------------------------
       if (env.ASSETS) {
         let response = await env.ASSETS.fetch(request);
