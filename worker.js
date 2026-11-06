@@ -9,8 +9,8 @@ export default {
 
     try {
       // ------------------------------------------------------------
-      // 1. STRICT COMPOSITE AUTHENTICATION: (location_id + username)
-      // Endpoints: /api/login and /api/auth/login
+      // 1. AUTHENTICATION & LOGIN: (location_id + username)
+      // Standardizes cameras to return the clean 'name' for paths
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
         const body = await request.json().catch(() => ({}));
@@ -28,7 +28,7 @@ export default {
         const locUpper = rawLoc.toUpperCase();
         const usernameLower = rawUser.toLowerCase();
 
-        // Query strictly on the composite unique pair (location_id, username)
+        // Strict composite authentication check
         const user = await env.DB.prepare(
           `SELECT * FROM users 
            WHERE UPPER(location_id) = ? 
@@ -43,7 +43,6 @@ export default {
           }, 401);
         }
 
-        // Verify password hash
         const isPasswordValid = await verifyPassword(password, user.password_hash);
         if (!isPasswordValid) {
           return jsonResponse({
@@ -52,15 +51,14 @@ export default {
           }, 401);
         }
 
-        // Canonical fixed location ID from database
         const fixedLocationId = user.location_id;
 
-        // Fetch location details
+        // Fetch location metadata
         const locationMeta = await env.DB.prepare(
           `SELECT location_id, description, address FROM locations WHERE location_id = ?`
-        ).bind(fixedLocationId).first() || { location_id: fixedLocationId, description: 'Active Facility' };
+        ).bind(fixedLocationId).first() || { location_id: fixedLocationId, description: 'Facility' };
 
-        // Fetch all cameras configured for this specific location
+        // Fetch cameras belonging to this location
         const cameraRecords = await env.DB.prepare(
           `SELECT camera_id, location_id, name FROM cameras WHERE location_id = ? ORDER BY camera_id ASC`
         ).bind(fixedLocationId).all();
@@ -68,23 +66,28 @@ export default {
         const siteCameras = cameraRecords.results || [];
 
         // Parse camera permissions
-        let allowedCameraIds = ['*'];
+        let allowedCameraNames = ['*'];
         try {
-          allowedCameraIds = JSON.parse(user.allowed_cameras || '["*"]');
+          allowedCameraNames = JSON.parse(user.allowed_cameras || '["*"]');
         } catch {
-          allowedCameraIds = ['*'];
+          allowedCameraNames = ['*'];
         }
 
-        let accessibleCameras = siteCameras;
-
-        // Admins see all cameras; others are filtered by allowed_cameras
-        if (user.role !== 'admin' && !allowedCameraIds.includes('*')) {
-          const lowerAllowed = allowedCameraIds.map(c => String(c).toLowerCase());
-          accessibleCameras = siteCameras.filter(cam =>
-            lowerAllowed.includes(String(cam.camera_id).toLowerCase()) ||
-            lowerAllowed.includes(String(cam.name || '').toLowerCase())
-          );
+        let authorizedCameras = siteCameras;
+        if (user.role !== 'admin' && !allowedCameraNames.includes('*')) {
+          const lowerAllowed = allowedCameraNames.map(c => String(c).toLowerCase());
+          authorizedCameras = siteCameras.filter(cam => {
+            const cleanName = String(cam.name || cam.camera_id || '').toLowerCase();
+            const cleanId = String(cam.camera_id || '').toLowerCase();
+            return lowerAllowed.includes(cleanName) || lowerAllowed.includes(cleanId);
+          });
         }
+
+        // Standardize output to use camera 'name' directly for storage folder resolution
+        const cleanCameraList = authorizedCameras.map(c => ({
+          name: (c.name || c.camera_id || 'apcam').trim(),
+          label: c.name || c.camera_id
+        }));
 
         return jsonResponse({
           status: 'success',
@@ -93,10 +96,10 @@ export default {
           user: {
             userId: user.user_id,
             username: user.username,
-            role: user.role,                  // Fixed role
-            locationId: fixedLocationId,     // Fixed site ID
+            role: user.role,
+            locationId: fixedLocationId,
             location: locationMeta,
-            cameras: accessibleCameras        // Fixed camera array
+            cameras: cleanCameraList
           }
         });
       }
@@ -210,7 +213,7 @@ export default {
 
       // ------------------------------------------------------------
       // 5. LIVE HLS STREAMING (/live/:file)
-      // Reads directly from root: HQ-AD/<cam>.m3u8 or HQ-AD/<cam>_xxx.ts
+      // Resolves root HLS files: <location>/<cameraname>.m3u8 or .ts
       // ------------------------------------------------------------
       if (pathname.startsWith('/live/')) {
         let rawFile = pathname.replace(/^\/live\//, '');
@@ -223,7 +226,7 @@ export default {
         let r2Key = `${location}/${rawFile}`;
         let object = await env.MEDIA_BUCKET.get(r2Key);
 
-        // Fallback for nested URLs (e.g. /live/apcam/stream.m3u8)
+        // Fallback for nested path patterns
         if (!object && rawFile.includes('/')) {
           const strippedFilename = rawFile.split('/').pop();
           r2Key = `${location}/${strippedFilename}`;
@@ -251,16 +254,16 @@ export default {
 
       // ------------------------------------------------------------
       // 6. SNAPSHOT RETRIEVAL (/api/snapshot/latest)
-      // Reads from: HQ-AD/snapshots/<cam>/*.jpg
-      // Supports: index=0..3 (for 2x2 quad view) and json=1 (metadata)
+      // Resolves: <location>/snapshots/<cameraname>/*.jpg
+      // Supports FIFO stack: index=0 (latest), 1, 2, 3 (oldest)
       // ------------------------------------------------------------
       if (pathname === '/api/snapshot/latest' && request.method === 'GET') {
         const rawLoc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
-        const rawCam = (url.searchParams.get('cam') || url.searchParams.get('camera') || 'apcam').trim().toLowerCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('camera') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
         const index = Math.max(0, parseInt(url.searchParams.get('index') || '0', 10));
         const isJson = url.searchParams.has('json');
 
-        const prefix = `${rawLoc}/snapshots/${rawCam}/`;
+        const prefix = `${rawLoc}/snapshots/${cameraName}/`;
         const list = await env.MEDIA_BUCKET.list({ prefix, limit: 60 });
         const images = (list.objects || []).filter(o => o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key));
 
@@ -268,7 +271,7 @@ export default {
           if (isJson) {
             return jsonResponse({ error: 'No snapshots available', prefix }, 404);
           }
-          return new Response(generatePlaceholderSvg(rawLoc, rawCam), {
+          return new Response(generatePlaceholderSvg(rawLoc, cameraName), {
             status: 200,
             headers: {
               'Content-Type': 'image/svg+xml',
@@ -278,7 +281,7 @@ export default {
           });
         }
 
-        // Sort descending: index 0 is newest, index 1 is 2nd newest, etc.
+        // Sort descending: index 0 = newest, index 3 = oldest
         images.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
         const selectedIndex = Math.min(index, images.length - 1);
         const selectedObject = images[selectedIndex];
@@ -310,42 +313,42 @@ export default {
       }
 
       // ------------------------------------------------------------
-      // 7. ON-DEMAND VIDEO REQUEST (/api/motion/request)
-      // Drops a marker in R2 for the local Windows watcher to upload the MP4
+      // 7. ON-DEMAND MOTION REQUEST (/api/motion/request)
+      // Writes marker to: <location>/requests/<cameraname>__<file>.req
       // ------------------------------------------------------------
       if (pathname === '/api/motion/request' && (request.method === 'POST' || request.method === 'GET')) {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
-        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
         let file = (url.searchParams.get('file') || '').trim();
 
         if (!file) {
-          return jsonResponse({ error: 'Parameter "file" (e.g. 20261105_103010_motion.mp4) is required.' }, 400);
+          return jsonResponse({ error: 'Parameter "file" is required.' }, 400);
         }
         if (!file.endsWith('.mp4')) {
           file = `${file}.mp4`;
         }
 
-        const videoKey = `${loc}/motion/${cam}/${file}`;
+        const videoKey = `${loc}/motion/${cameraName}/${file}`;
 
-        // Return immediately if video is already available in R2
+        // Return immediately if video is already present in R2
         const existing = await env.MEDIA_BUCKET.head(videoKey);
         if (existing) {
           return jsonResponse({
             status: 'ready',
             key: videoKey,
-            playbackUrl: `/api/motion/latest?location=${loc}&cam=${cam}&file=${encodeURIComponent(file)}`
+            playbackUrl: `/api/motion/latest?location=${loc}&cam=${cameraName}&file=${encodeURIComponent(file)}`
           });
         }
 
-        // Drop .req marker in R2 for local watcher to pick up
-        const markerKey = `${loc}/requests/${cam}__${file}.req`;
+        // Drop .req marker in R2 for local r2_watcher.py to detect
+        const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
         await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
           httpMetadata: { contentType: 'application/json' }
         });
 
         return jsonResponse({
           status: 'pending',
-          message: 'Video upload requested from local storage.',
+          message: 'Video upload requested from local disk.',
           key: videoKey,
           marker: markerKey
         });
@@ -353,11 +356,11 @@ export default {
 
       // ------------------------------------------------------------
       // 8. MOTION VIDEO STATUS CHECK (/api/motion/status)
-      // Polled by frontend while waiting for the requested MP4 to upload
+      // Polled by frontend while waiting for the requested MP4
       // ------------------------------------------------------------
       if (pathname === '/api/motion/status' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
-        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
         let file = url.searchParams.get('file');
 
         if (!file) {
@@ -367,7 +370,7 @@ export default {
           file = `${file}.mp4`;
         }
 
-        const videoKey = `${loc}/motion/${cam}/${file}`;
+        const videoKey = `${loc}/motion/${cameraName}/${file}`;
         const existing = await env.MEDIA_BUCKET.head(videoKey);
 
         if (existing) {
@@ -383,11 +386,11 @@ export default {
 
       // ------------------------------------------------------------
       // 9. MOTION VIDEO STREAMING (/api/motion/latest)
-      // Serves requested .mp4 motion clip
+      // Reads from: <location>/motion/<cameraname>/*.mp4
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
-        const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
+        const cameraName = (url.searchParams.get('cam') || url.searchParams.get('name') || 'apcam').trim().toLowerCase();
         const requestedFile = url.searchParams.get('file');
         const isJson = url.searchParams.has('json');
 
@@ -395,14 +398,14 @@ export default {
 
         if (requestedFile) {
           const cleanFile = requestedFile.endsWith('.mp4') ? requestedFile : `${requestedFile}.mp4`;
-          targetKey = `${loc}/motion/${cam}/${cleanFile}`;
+          targetKey = `${loc}/motion/${cameraName}/${cleanFile}`;
         } else {
-          const prefix = `${loc}/motion/${cam}/`;
+          const prefix = `${loc}/motion/${cameraName}/`;
           const list = await env.MEDIA_BUCKET.list({ prefix, limit: 30 });
           const clips = (list.objects || []).filter(o => o.key.toLowerCase().endsWith('.mp4'));
 
           if (clips.length === 0) {
-            return jsonResponse({ status: 'idle', message: 'No motion clips found', camera: cam }, 404);
+            return jsonResponse({ status: 'idle', message: 'No motion clips found', camera: cameraName }, 404);
           }
 
           clips.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
@@ -469,7 +472,7 @@ async function getAdminUser(env, userId) {
 
 async function verifyPassword(inputPassword, storedHash) {
   if (!inputPassword || !storedHash) return false;
-  if (storedHash === inputPassword) return true; // Direct plain text match support
+  if (storedHash === inputPassword) return true; // Plaintext support
 
   const encoder = new TextEncoder();
   const data = encoder.encode(inputPassword);
