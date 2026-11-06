@@ -259,36 +259,38 @@
       document.getElementById('viewer-modal').style.display = 'flex';
     }
 
-    async function fetchAndPlayMotion() {
-      if (!currentSelectedSnap) return;
+async function fetchAndPlayMotion() {
+  if (!currentSelectedSnap) return;
 
-      // Extract base filename (e.g. "snap1") and map directly to ".mp4"
-      const baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
-      const mp4File = `${baseName}.mp4`;
-      const playBtn = document.getElementById('modal-play-action');
-      
-      playBtn.disabled = true;
-      playBtn.textContent = 'Checking cloud cache…';
+  // 1. Strip image extensions (.jpg, .png, etc.) AND any legacy '_motion' suffix
+  let baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
+  baseName = baseName.replace(/_motion$/i, '');
 
-      try {
-        const checkRes = await fetch(`/api/motion/check?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`);
-        const statusData = await checkRes.json();
+  // 2. Attach exact .mp4 extension
+  const mp4File = `${baseName}.mp4`;
+  const playBtn = document.getElementById('modal-play-action');
+  
+  playBtn.disabled = true;
+  playBtn.textContent = 'Checking cloud cache…';
 
-        // If file exists in R2, play immediately
-        if (statusData.status === 'ready') {
-          startPlayback(mp4File);
-          return;
-        }
+  try {
+    const checkRes = await fetch(`/api/motion/check?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`);
+    const statusData = await checkRes.json();
 
-        // Single try: If missing from cache/disk, update UI immediately without polling
-        playBtn.textContent = 'File not found on local disk';
-        playBtn.disabled = false;
-
-      } catch (err) {
-        playBtn.textContent = 'Connection error';
-        playBtn.disabled = false;
-      }
+    if (statusData.status === 'ready') {
+      startPlayback(mp4File);
+      return;
     }
+
+    // Single-try handling: Show missing file state instantly without polling again
+    playBtn.textContent = 'File not found on local disk';
+    playBtn.disabled = false;
+
+  } catch (err) {
+    playBtn.textContent = 'Connection error';
+    playBtn.disabled = false;
+  }
+}
 
     function startPlayback(mp4File) {
       const modalImg = document.getElementById('modal-img');
