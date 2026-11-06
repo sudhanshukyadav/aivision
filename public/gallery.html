@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Camera Snapshot History</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: #090d16;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .top-bar {
+      height: 52px;
+      background: #0f172a;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .bar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .back-btn {
+      background: #1e293b;
+      color: #38bdf8;
+      border: 1px solid #334155;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      text-decoration: none;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .back-btn:hover {
+      background: #334155;
+    }
+    .cam-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .cam-meta {
+      font-size: 12px;
+      color: #94a3b8;
+      background: #1e293b;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid #334155;
+    }
+    .count-badge {
+      font-size: 13px;
+      color: #38bdf8;
+      font-weight: 500;
+    }
+
+    .gallery-container {
+      flex: 1;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+
+    .thumb-card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      cursor: pointer;
+      transition: transform 0.15s ease, border-color 0.15s ease;
+    }
+    .thumb-card:hover {
+      transform: translateY(-2px);
+      border-color: #38bdf8;
+    }
+    .thumb-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #030712;
+      overflow: hidden;
+    }
+    .thumb-wrapper img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      loading: lazy;
+    }
+    .thumb-info {
+      padding: 8px 10px;
+      background: #0f172a;
+      border-top: 1px solid #1e293b;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .info-date {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f8fafc;
+      letter-spacing: 0.3px;
+    }
+    .info-time {
+      font-size: 11px;
+      color: #38bdf8;
+      font-family: monospace;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 7, 18, 0.95);
+      z-index: 100;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-close {
+      position: absolute;
+      top: 16px;
+      right: 20px;
+      background: #1e293b;
+      color: #fff;
+      border: 1px solid #334155;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      font-size: 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-close:hover {
+      background: #ef4444;
+    }
+    .modal-image {
+      max-width: 90vw;
+      max-height: 75vh;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      object-fit: contain;
+    }
+    .modal-bar {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .modal-timestamp {
+      font-size: 14px;
+      color: #f8fafc;
+      font-weight: 500;
+    }
+    .modal-play-btn {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 7px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.2s;
+    }
+    .modal-play-btn:hover {
+      background: #0369a1;
+    }
+
+    .modal-video-wrap {
+      display: none;
+      width: 90vw;
+      max-width: 1080px;
+      max-height: 75vh;
+      background: #000;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #334155;
+    }
+    .modal-video-wrap video {
+      width: 100%;
+      height: 100%;
+      max-height: 75vh;
+      display: block;
+    }
+
+    .empty-state {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: #64748b;
+      margin-top: 80px;
+      font-size: 15px;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="top-bar">
+    <div class="bar-left">
+      <a href="/live.html" class="back-btn">&larr; Live Grid</a>
+      <span class="cam-title" id="cam-header-title">Camera History</span>
+      <span class="cam-meta" id="cam-header-meta">HQ-AD</span>
+    </div>
+    <div class="count-badge" id="snap-count">Loading…</div>
+  </header>
+
+  <main class="gallery-container" id="gallery-grid">
+    <!-- Populated dynamically -->
+  </main>
+
+  <div class="modal-overlay" id="viewer-modal">
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <img id="modal-img" class="modal-image" src="" alt="Fullscreen Still" />
+    <div class="modal-video-wrap" id="modal-vid-wrap">
+      <video id="modal-vid-player" controls playsinline></video>
+    </div>
+    <div class="modal-bar">
+      <span class="modal-timestamp" id="modal-time-label"></span>
+      <button class="modal-play-btn" id="modal-play-action" onclick="playCurrentMotion()">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
+          <path d="M8 5v14l11-7z"/>
+        </svg>
+        Play 10s Motion Clip
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const sessionRaw = localStorage.getItem('aisys_session');
+    const session = sessionRaw ? JSON.parse(sessionRaw) : {};
+
+    const LOCATION = (params.get('location') || session.locationId || 'HQ-AD').toUpperCase();
+    const CAMERA = (params.get('cam') || 'apcam').toLowerCase();
+
+    let currentSelectedSnap = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('cam-header-title').textContent = CAMERA.toUpperCase();
+      document.getElementById('cam-header-meta').textContent = LOCATION;
+      loadCameraSnapshots();
+    });
+
+    function formatDateTime(dateObj) {
+      const year = dateObj.getFullYear();
+      const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const day = String(dateObj.getDate()).padStart(2, '0');
+      const hours = String(dateObj.getHours()).padStart(2, '0');
+      const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+      const seconds = String(dateObj.getSeconds()).padStart(2, '0');
+
+      return {
+        date: `${year}-${month}-${day}`,
+        time: `${hours}:${minutes}:${seconds}`
+      };
+    }
+
+    async function loadCameraSnapshots() {
+      const grid = document.getElementById('gallery-grid');
+      const countEl = document.getElementById('snap-count');
+
+      try {
+        const res = await fetch(`/api/snapshots/list?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}`);
+        if (!res.ok) throw new Error('API returned ' + res.status);
+        const data = await res.json();
+
+        const snaps = data.snapshots || [];
+        countEl.textContent = `${snaps.length} Total Snapshots`;
+
+        if (snaps.length === 0) {
+          grid.innerHTML = `<div class="empty-state">No snapshots found for ${CAMERA} at ${LOCATION}.</div>`;
+          return;
+        }
+
+        grid.innerHTML = snaps.map((s, idx) => {
+          const dateObj = new Date(s.uploaded);
+          const dt = formatDateTime(dateObj);
+          const imgUrl = `/api/snapshot/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&index=${idx}`;
+
+          return `
+            <div class="thumb-card" onclick="openModal('${s.filename}', '${s.uploaded}', ${idx})">
+              <div class="thumb-wrapper">
+                <img src="${imgUrl}" alt="${s.filename}" loading="lazy" />
+              </div>
+              <div class="thumb-info">
+                <span class="info-date">${dt.date}</span>
+                <span class="info-time">${dt.time}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+      } catch (err) {
+        countEl.textContent = 'Error loading history';
+        grid.innerHTML = `<div class="empty-state">Failed to connect to storage: ${err.message}</div>`;
+      }
+    }
+
+    function openModal(filename, uploadedStr, index) {
+      currentSelectedSnap = { filename, uploadedStr, index };
+      const dt = formatDateTime(new Date(uploadedStr));
+
+      const modal = document.getElementById('viewer-modal');
+      const modalImg = document.getElementById('modal-img');
+      const vidWrap = document.getElementById('modal-vid-wrap');
+      const timeLabel = document.getElementById('modal-time-label');
+      const playBtn = document.getElementById('modal-play-action');
+
+      modalImg.style.display = 'block';
+      vidWrap.style.display = 'none';
+      playBtn.style.display = 'flex';
+
+      modalImg.src = `/api/snapshot/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&index=${index}`;
+      timeLabel.textContent = `${dt.date}  ${dt.time}`;
+      modal.style.display = 'flex';
+    }
+
+    function playCurrentMotion() {
+      if (!currentSelectedSnap) return;
+      const baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
+      const mp4File = `${baseName}_motion.mp4`;
+
+      const modalImg = document.getElementById('modal-img');
+      const vidWrap = document.getElementById('modal-vid-wrap');
+      const vidPlayer = document.getElementById('modal-vid-player');
+      const playBtn = document.getElementById('modal-play-action');
+
+      modalImg.style.display = 'none';
+      playBtn.style.display = 'none';
+      vidWrap.style.display = 'block';
+
+      vidPlayer.src = `/api/motion/latest?location=${LOCATION}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      vidPlayer.muted = true;
+      vidPlayer.play().catch(() => {});
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('viewer-modal');
+      const vidPlayer = document.getElementById('modal-vid-player');
+      if (vidPlayer) {
+        vidPlayer.pause();
+        vidPlayer.removeAttribute('src');
+      }
+      modal.style.display = 'none';
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+  </script>
+</body>
+</html>
