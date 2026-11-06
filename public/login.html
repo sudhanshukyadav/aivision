@@ -43,7 +43,7 @@
     letter-spacing: 0.05em;
     font-weight: 600;
   }
-  input, select {
+  input {
     width: 100%;
     padding: 0.65rem 0.8rem;
     border: 1px solid #334155;
@@ -52,7 +52,7 @@
     color: #f8fafc;
     font-size: 0.95rem;
   }
-  input:focus, select:focus {
+  input:focus {
     outline: none;
     border-color: #38bdf8;
   }
@@ -88,18 +88,16 @@
 <body>
 <div class="card">
   <h1>Industrial Camera Portal</h1>
-  <p class="sub">Sign in to access your camera feeds</p>
+  <p class="sub">Verify credentials to proceed</p>
   <form id="loginForm">
-    <label for="siteId">Site / Location ID</label>
-    <select id="siteId" required>
-      <option value="">Loading locations…</option>
-    </select>
+    <label for="locationId">Site / Location ID</label>
+    <input id="locationId" type="text" value="HQ-AD" autocomplete="off" required>
 
     <label for="username">Username</label>
-    <input id="username" type="text" placeholder="Username" autocomplete="username" required>
+    <input id="username" type="text" value="Indu" autocomplete="username" required>
 
     <label for="password">Password</label>
-    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" required>
+    <input id="password" type="password" value="123" autocomplete="current-password" required>
 
     <button type="submit" id="submitBtn">Sign In</button>
     <div class="err" id="err"></div>
@@ -108,51 +106,31 @@
 
 <script>
 const err = document.getElementById('err');
-const siteSel = document.getElementById('siteId');
 const btn = document.getElementById('submitBtn');
 
-// 1. Fetch available location_ids from D1
-fetch('/api/sites')
-  .then(r => {
-    if (!r.ok) throw new Error('API returned status ' + r.status);
-    return r.json();
-  })
-  .then(d => {
-    if (!d.sites || d.sites.length === 0) {
-      siteSel.innerHTML = '<option value="">No locations available</option>';
-      return;
-    }
-    siteSel.innerHTML = d.sites.map(s => 
-      `<option value="${s.locationId}">${s.label || s.locationId}</option>`
-    ).join('');
-  })
-  .catch(() => {
-    // Fail-safe fallback so the user can still sign in
-    siteSel.innerHTML = '<option value="HQ-AD">HQ-AD</option>';
-  });
-
-// 2. Submit composite credentials and lock session
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   err.textContent = '';
   btn.disabled = true;
   btn.textContent = 'Authenticating...';
 
-  const locationId = siteSel.value.trim().toUpperCase();
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value;
+  const payload = {
+    locationId: document.getElementById('locationId').value.trim().toUpperCase(),
+    username: document.getElementById('username').value.trim(),
+    password: document.getElementById('password').value
+  };
 
   try {
     const res = await fetch('/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locationId, username, password })
+      body: JSON.stringify(payload)
     });
 
     const data = await res.json().catch(() => ({}));
 
     if (res.ok && (data.status === 'success' || data.success)) {
-      // Lock user, role, site, and cameras into localStorage for live.js
+      // Save full verified session to localStorage
       localStorage.setItem('aisys_session', JSON.stringify({
         token: data.token,
         locationId: data.user.locationId,
@@ -161,7 +139,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         cameras: data.user.cameras
       }));
 
-      // Redirect directly to the live dashboard
+      // Direct redirection to the live grid
       window.location.href = '/live.html';
     } else {
       err.textContent = data.error || 'Authentication failed. Check credentials.';
