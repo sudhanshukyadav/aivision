@@ -384,9 +384,9 @@ export default {
         return jsonResponse({ status: 'transferring' });
       }
 
-      // ------------------------------------------------------------
+// ------------------------------------------------------------
       // 9. MOTION VIDEO STREAMING (/api/motion/latest)
-      // Reads from: <location>/motion/<cameraname>/*.mp4
+      // Supports HTTP 206 Partial Content (Byte-Range Seeking)
       // ------------------------------------------------------------
       if (pathname === '/api/motion/latest' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
@@ -412,7 +412,10 @@ export default {
           targetKey = clips[0].key;
         }
 
-        const videoObject = await env.MEDIA_BUCKET.get(targetKey);
+        const videoObject = await env.MEDIA_BUCKET.get(targetKey, {
+          range: request.headers.get('Range')
+        });
+
         if (!videoObject) {
           return jsonResponse({ error: 'Video clip not ready or missing', key: targetKey }, 404);
         }
@@ -428,11 +431,23 @@ export default {
 
         const headers = new Headers();
         headers.set('Content-Type', 'video/mp4');
+        headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Accept-Ranges', 'bytes');
         headers.set('Cache-Control', 'public, max-age=86400');
         headers.set('X-AISYS-Motion-Key', targetKey);
-        headers.set('Access-Control-Allow-Origin', '*');
 
-        return new Response(videoObject.body, { headers });
+        // Check if browser requested a partial range (Byte-Range Request)
+        if (request.headers.has('Range')) {
+          const range = videoObject.range;
+          if (range) {
+            headers.set('Content-Range', `bytes ${range.offset}-${range.offset + range.length - 1}/${videoObject.size}`);
+            headers.set('Content-Length', String(range.length));
+            return new Response(videoObject.body, { status: 206, headers });
+          }
+        }
+
+        headers.set('Content-Length', String(videoObject.size));
+        return new Response(videoObject.body, { status: 200, headers });
       }
 
       // ------------------------------------------------------------
