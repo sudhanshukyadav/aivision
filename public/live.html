@@ -4,12 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AISYS Industrial Camera Portal - 2x2 Grid</title>
-  <!-- Cross-browser HLS support for live streams -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
-    /* ------------------------------------------------------------
-       RESET & BASE VIEWPORT
-       ------------------------------------------------------------ */
     *, *::before, *::after {
       box-sizing: border-box;
       margin: 0;
@@ -24,9 +20,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* ------------------------------------------------------------
-       TOP NAVIGATION BAR
-       ------------------------------------------------------------ */
+    /* TOP BAR */
     .header-bar {
       height: 48px;
       width: 100%;
@@ -83,9 +77,7 @@
       background: #ef4444;
     }
 
-    /* ------------------------------------------------------------
-       OUTER 2x2 CAMERA GRID
-       ------------------------------------------------------------ */
+    /* OUTER 2x2 CAMERA GRID */
     .outer-grid {
       display: grid !important;
       grid-template-columns: repeat(2, 1fr) !important;
@@ -97,9 +89,7 @@
       background: #06090f;
     }
 
-    /* ------------------------------------------------------------
-       INDIVIDUAL CAMERA CARD
-       ------------------------------------------------------------ */
+    /* CAMERA CARD */
     .cam-card {
       background: #0f172a;
       border: 1px solid #1e293b;
@@ -155,9 +145,7 @@
       background: #0369a1;
     }
 
-    /* ------------------------------------------------------------
-       INNER 2x2 FIFO SNAPSHOT QUAD
-       ------------------------------------------------------------ */
+    /* INNER 2x2 FIFO SNAPSHOT QUAD */
     .quad-grid {
       flex: 1;
       display: grid !important;
@@ -222,9 +210,7 @@
       opacity: 1;
     }
 
-    /* ------------------------------------------------------------
-       VIDEO / STREAM CONTAINER
-       ------------------------------------------------------------ */
+    /* VIDEO PLAYER VIEW */
     .video-view {
       position: absolute;
       top: 32px;
@@ -275,7 +261,6 @@
 </head>
 <body>
 
-  <!-- TOP STATUS BAR -->
   <header class="header-bar">
     <div class="header-left">
       <span class="status-dot"></span>
@@ -287,7 +272,6 @@
     </div>
   </header>
 
-  <!-- 2x2 CAMERA GRID -->
   <main class="outer-grid" id="outer-camera-grid">
     <!-- Populated dynamically -->
   </main>
@@ -297,7 +281,7 @@
     let pollInterval = null;
     let hlsPlayers = {};
 
-    // 1. STRICT SESSION RECOVERY
+    // 1. RECOVER VERIFIED SESSION
     const rawSession = localStorage.getItem('aisys_session');
     if (!rawSession) {
       window.location.replace('/login.html');
@@ -315,7 +299,7 @@
     const USER = (session && session.username) ? session.username : 'operator';
     const ROLE = (session && session.role) ? session.role.toUpperCase() : 'VIEWER';
 
-    // 2. DEFINE 4 CAMERAS FOR THE 2x2 GRID
+    // 2. GUARANTEE 4 CAMERA SLOTS
     let rawCameras = (session && Array.isArray(session.cameras) && session.cameras.length > 0)
       ? session.cameras
       : [{ name: 'apcam' }];
@@ -351,7 +335,7 @@
               </button>
             </div>
 
-            <!-- 2x2 FIFO SNAPSHOT STACK: 0=Newest, 3=Oldest -->
+            <!-- 2x2 FIFO Stack: 0=Latest, 3=Oldest -->
             <div class="quad-grid" id="quad-${camName}">
               ${[0, 1, 2, 3].map(idx => `
                 <div class="quad-cell" onclick="handleSnapClick('${camName}', ${idx})">
@@ -365,17 +349,17 @@
                     <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22">
                       <path d="M8 5v14l11-7z"/>
                     </svg>
-                    <span>Play 10s Clip</span>
+                    <span>Play Motion Clip</span>
                   </div>
                 </div>
               `).join('')}
             </div>
 
-            <!-- ON-DEMAND VIDEO / LIVE STREAM VIEW -->
+            <!-- VIDEO PLAYER VIEW -->
             <div class="video-view" id="vview-${camName}" style="display: none;">
               <video id="vplayer-${camName}" controls playsinline muted preload="auto"></video>
               <button class="btn-close-vid" title="Close" onclick="closeVideo('${camName}')">&times;</button>
-              <div class="vid-loading" id="vload-${camName}" style="display: none;">Requesting clip...</div>
+              <div class="vid-loading" id="vload-${camName}" style="display: none;">Loading motion video...</div>
             </div>
           </div>
         `;
@@ -392,7 +376,6 @@
           const camName = cam.name.toLowerCase();
           const vidWrap = document.getElementById(`vview-${camName}`);
 
-          // Skip polling if the video or live player is currently open
           if (vidWrap && vidWrap.style.display === 'block') return;
 
           for (let idx = 0; idx < 4; idx++) {
@@ -408,7 +391,7 @@
       }, POLL_MS);
     }
 
-    // 5. ON-DEMAND MOTION CLIP (Triggered on click, with browser autoplay fallback)
+    // 5. DIRECT R2 MP4 VIDEO PLAYBACK (No local waiting loop)
     async function handleSnapClick(camName, idx) {
       const quad = document.getElementById(`quad-${camName}`);
       const vview = document.getElementById(`vview-${camName}`);
@@ -418,51 +401,36 @@
       quad.style.display = 'none';
       vview.style.display = 'block';
       vload.style.display = 'flex';
-      vload.textContent = 'Requesting 10s clip from camera drive...';
+      vload.textContent = 'Connecting to video stream…';
 
       try {
         const metaRes = await fetch(`/api/snapshot/latest?location=${LOC}&cam=${encodeURIComponent(camName)}&index=${idx}&json=1`);
         const meta = await metaRes.json();
         const base = (meta.key || '').split('/').pop().replace(/\.(jpe?g|png|webp)$/i, '');
-        const mp4 = `${base}_motion.mp4`;
+        const exactFile = `${base}_motion.mp4`;
 
-        // Notify edge worker to drop the .req marker
-        await fetch(`/api/motion/request?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`);
+        // Attempt exact matching MP4
+        const exactUrl = `/api/motion/latest?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(exactFile)}`;
+        const check = await fetch(exactUrl, { method: 'HEAD' });
 
-        let attempts = 0;
-        const checkTimer = setInterval(async () => {
-          attempts++;
-          vload.textContent = `Transferring clip... (${attempts}s)`;
+        if (check.ok) {
+          vplayer.src = exactUrl;
+        } else {
+          // Fall back to the most recent MP4 in the bucket for this camera
+          vplayer.src = `/api/motion/latest?location=${LOC}&cam=${encodeURIComponent(camName)}`;
+        }
 
-          try {
-            const stRes = await fetch(`/api/motion/status?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`);
-            const stData = await stRes.json();
-
-            if (stData.status === 'ready' || attempts >= 8) {
-              clearInterval(checkTimer);
-              vload.style.display = 'none';
-
-              const clipUrl = `/api/motion/latest?location=${LOC}&cam=${encodeURIComponent(camName)}&file=${encodeURIComponent(mp4)}`;
-              
-              vplayer.src = clipUrl;
-              vplayer.muted = true; // Enables browser autoplay
-              vplayer.load();
-
-              const playPromise = vplayer.play();
-              if (playPromise !== undefined) {
-                playPromise.catch((err) => {
-                  console.warn('Autoplay blocked. User can click play:', err);
-                });
-              }
-            }
-          } catch (e) {
-            clearInterval(checkTimer);
-            closeVideo(camName);
-          }
-        }, 1000);
+        vload.style.display = 'none';
+        vplayer.muted = true;
+        vplayer.load();
+        
+        const playPromise = vplayer.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(e => console.warn('Autoplay prevented, tap play:', e));
+        }
 
       } catch (e) {
-        vload.textContent = 'Recording not found for this snapshot.';
+        vload.textContent = 'No motion video available in R2.';
         setTimeout(() => closeVideo(camName), 2000);
       }
     }
