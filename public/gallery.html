@@ -1,64 +1,44 @@
-def process_on_demand_requests():
-    request_prefix = f"{LOCATION_ID}/requests/"
-    logger.info(f"On-demand motion request listener active on prefix: {request_prefix}")
+async function fetchAndPlayMotion() {
+  if (!currentSelectedSnap) return;
 
-    while True:
-        try:
-            res = s3_client.list_objects_v2(
-                Bucket=R2_BUCKET_NAME,
-                Prefix=request_prefix,
-                MaxKeys=10
-            )
+  // 1. Strip image extension (.jpg, .png, etc.)
+  const baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
+  
+  // 2. Use the exact base name with .mp4 extension (No extra '_motion' suffix)
+  const mp4File = `${baseName}.mp4`;
+  
+  const playBtn = document.getElementById('modal-play-action');
+  
+  playBtn.disabled = true;
+  playBtn.textContent = 'Checking cloud cache…';
 
-            for item in res.get("Contents", []):
-                marker_key = item["Key"]
-                if not marker_key.endswith(".req"):
-                    continue
+  try {
+    const checkRes = await fetch(`/api/motion/check?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`);
+    const statusData = await checkRes.json();
 
-                filename_part = marker_key[len(request_prefix):][:-4]  # Remove prefix & '.req'
+    if (statusData.status === 'ready') {
+      startPlayback(mp4File);
+      return;
+    }
 
-                if "__" in filename_part:
-                    cam_name, mp4_name = filename_part.split("__", 1)
-                else:
-                    cam_name = "apcam"
-                    mp4_name = filename_part
+    playBtn.textContent = 'Fetching from camera disk…';
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      const retryRes = await fetch(`/api/motion/check?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`);
+      const checkAgain = await retryRes.json();
 
-                logger.info(f"[DEMAND SIGNAL] Camera='{cam_name}', Video='{mp4_name}'")
+      if (checkAgain.status === 'ready') {
+        clearInterval(poll);
+        startPlayback(mp4File);
+      } else if (attempts > 15) {
+        clearInterval(poll);
+        playBtn.textContent = 'File not found on local disk';
+      }
+    }, 1500);
 
-                # Resolve search candidates on local disk
-                candidate_paths = [
-                    WATCH_DIR / "motion" / cam_name / mp4_name,
-                    WATCH_DIR / cam_name / "motion" / mp4_name,
-                    WATCH_DIR / "motion" / mp4_name
-                ]
-
-                local_mp4 = None
-                for path in candidate_paths:
-                    if path.is_file():
-                        local_mp4 = path
-                        break
-
-                # Global fallback search across WATCH_DIR if exact directory match fails
-                if not local_mp4:
-                    matches = list(WATCH_DIR.glob(f"**/{mp4_name}"))
-                    if matches:
-                        local_mp4 = matches[0]
-
-                target_key = f"{LOCATION_ID}/motion/{cam_name}/{mp4_name}"
-
-                if local_mp4 and local_mp4.is_file():
-                    logger.info(f"Uploading requested motion clip: {local_mp4} -> {target_key}")
-                    success = upload_file(local_mp4, target_key, "video/mp4")
-                    if success:
-                        try:
-                            s3_client.delete_object(Bucket=R2_BUCKET_NAME, Key=marker_key)
-                            logger.info(f"Cleared request ticket: {marker_key}")
-                        except Exception as ex:
-                            logger.warning(f"Failed to clear ticket {marker_key}: {ex}")
-                else:
-                    logger.error(f"Requested clip '{mp4_name}' not found on local disk under {WATCH_DIR}")
-
-        except Exception as ex:
-            logger.error(f"Connection or polling error in motion listener: {ex}")
-
-        time.sleep(1.5)
+  } catch (err) {
+    playBtn.textContent = 'Connection error';
+    playBtn.disabled = false;
+  }
+}
