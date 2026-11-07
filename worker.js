@@ -12,7 +12,6 @@ export default {
       // 1. COMPOSITE AUTHENTICATION: (location_id + username)
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
-        // Safe JSON parsing of request body
         let body = {};
         try {
           body = await request.json();
@@ -107,7 +106,6 @@ export default {
 
         const videoKey = `${loc}/motion/${cameraName}/${file}`;
 
-        // 1. Check if the file is ALREADY stored in R2
         const existing = await env.MEDIA_BUCKET.head(videoKey);
         if (existing) {
           return jsonResponse({
@@ -118,7 +116,6 @@ export default {
           });
         }
 
-        // 2. Not in R2: Drop request ticket marker for r2_watcher.py
         const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
         if (!(await env.MEDIA_BUCKET.head(markerKey))) {
           await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
@@ -305,7 +302,8 @@ export default {
         headers.set('Content-Length', String(size));
         return new Response(videoObject.body, { status: 200, headers });
       }
-// ------------------------------------------------------------
+
+      // ------------------------------------------------------------
       // ADMIN TABLES ENDPOINT (/api/admin/tables)
       // ------------------------------------------------------------
       if (pathname === '/api/admin/tables' && request.method === 'GET') {
@@ -313,14 +311,35 @@ export default {
           return jsonResponse({ status: 'error', error: 'Database binding (env.DB) missing' }, 500);
         }
 
+        const requestedTable = url.searchParams.get('table');
+
         try {
-          // Query D1 SQLite master schema for tables
+          // If a specific table is requested (e.g., /api/admin/tables?table=users)
+          if (requestedTable) {
+            const cleanTableName = requestedTable.replace(/[^\w]/g, '');
+            const tableData = await env.DB.prepare(`SELECT * FROM ${cleanTableName} LIMIT 500`).all();
+            return jsonResponse({
+              status: 'success',
+              table: cleanTableName,
+              rows: tableData.results || []
+            });
+          }
+
+          // Otherwise return list of all tables formatted for UI array iteration
           const tablesQuery = await env.DB.prepare(
             `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC`
           ).all();
 
-          const tables = (tablesQuery.results || []).map(t => t.name);
-          return jsonResponse({ status: 'success', tables });
+          const tableRows = tablesQuery.results || [];
+          const tableNames = tableRows.map(t => t.name);
+          const tableObjects = tableRows.map(t => ({ name: t.name }));
+
+          return jsonResponse({
+            status: 'success',
+            tables: tableObjects,       // Object format expected by admin UI
+            tableList: tableNames,      // String array fallback
+            raw: tableRows
+          });
         } catch (err) {
           return jsonResponse({ status: 'error', error: err.message || 'Failed to list tables' }, 500);
         }
@@ -344,6 +363,7 @@ export default {
           return jsonResponse({ status: 'error', error: err.message || 'Failed to list users' }, 500);
         }
       }
+
       // ------------------------------------------------------------
       // 7. STATIC SPA SERVING
       // ------------------------------------------------------------
