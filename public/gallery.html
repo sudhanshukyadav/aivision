@@ -81,6 +81,13 @@
       background: #0284c7; color: #fff; border: none; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;
     }
     .modal-play-btn:hover { background: #0369a1; }
+    .modal-nav-btn {
+      display: inline-flex; align-items: center; gap: 6px; background: #1e293b; color: #38bdf8;
+      border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .modal-nav-btn:hover:not(:disabled) { background: #334155; color: #f8fafc; }
+    .modal-nav-btn:disabled { opacity: 0.35; cursor: default; }
     .modal-dl-btn {
       display: inline-flex; align-items: center; gap: 6px; background: #1e293b; color: #38bdf8;
       border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
@@ -146,12 +153,14 @@
       <video id="modal-vid-player" controls playsinline></video>
     </div>
     <div class="modal-bar">
+      <button class="modal-nav-btn" id="modal-prev-btn" onclick="navigateModal(-1)" title="Previous snapshot (Left Arrow)">&#9664; Prev</button>
       <span class="modal-timestamp" id="modal-time-label"></span>
       <button class="modal-play-btn" id="modal-play-action" onclick="fetchAndPlayMotion()">
         Play 10s Motion Clip
       </button>
       <a class="modal-dl-btn" id="modal-dl-img" href="#" title="Save this snapshot"><span aria-hidden="true">&#11015;</span> Image</a>
       <a class="modal-dl-btn" id="modal-dl-clip" href="#" title="Save this motion clip" style="display: none;"><span aria-hidden="true">&#11015;</span> Clip</a>
+      <button class="modal-nav-btn" id="modal-next-btn" onclick="navigateModal(1)" title="Next snapshot (Right Arrow)">Next &#9654;</button>
     </div>
   </div>
 
@@ -166,9 +175,16 @@
 
     let allSnapshots = [];
     let currentFilterDate = null;
-    let currentSelectedSnap = null;
+    let currentModalIndex = -1;
     const PAGE_SIZE = 20;
     let currentPage = 0;   // 0 = newest 20
+
+    function getFilteredSnapshots() {
+      if (currentFilterDate) {
+        return allSnapshots.filter(s => formatDateTime(captureDate(s)).dateStr === currentFilterDate);
+      }
+      return allSnapshots;
+    }
 
     function captureDate(snap) {
       const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(String(snap.filename || snap.key || ''));
@@ -224,10 +240,7 @@
 
     function renderSnapshotsGrid() {
       const grid = document.getElementById('gallery-grid');
-      let filtered = allSnapshots;
-      if (currentFilterDate) {
-        filtered = allSnapshots.filter(s => formatDateTime(captureDate(s)).dateStr === currentFilterDate);
-      }
+      const filtered = getFilteredSnapshots();
 
       document.getElementById('snap-count').textContent = `${filtered.length} Snaps`;
 
@@ -241,12 +254,13 @@
       }
 
       const pageItems = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-      grid.innerHTML = pageItems.map((s, idx) => {
+      grid.innerHTML = pageItems.map((s) => {
+        const globalIdx = allSnapshots.indexOf(s);
         const dt = formatDateTime(captureDate(s));
         const imgUrl = snapUrl(s.key);
 
         return `
-          <div class="thumb-card" onclick="openModal(${allSnapshots.indexOf(s)})">
+          <div class="thumb-card" onclick="openModal(${globalIdx})">
             <div class="thumb-wrapper">
               <img src="${imgUrl}" alt="${s.filename}" loading="lazy" />
             </div>
@@ -275,11 +289,18 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
+    // Keyboard navigation: pages through grid when modal is closed, cycles snapshots when modal is open
     document.addEventListener('keydown', (e) => {
-      if (document.getElementById('viewer-modal').style.display === 'flex') return;
       if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
-      if (e.key === 'ArrowLeft' && !document.getElementById('pager-prev').disabled) changePage(-1);
-      if (e.key === 'ArrowRight' && !document.getElementById('pager-next').disabled) changePage(1);
+      const modalOpen = document.getElementById('viewer-modal').style.display === 'flex';
+      if (modalOpen) {
+        if (e.key === 'ArrowLeft') navigateModal(-1);
+        if (e.key === 'ArrowRight') navigateModal(1);
+        if (e.key === 'Escape') closeModal();
+      } else {
+        if (e.key === 'ArrowLeft' && !document.getElementById('pager-prev').disabled) changePage(-1);
+        if (e.key === 'ArrowRight' && !document.getElementById('pager-next').disabled) changePage(1);
+      }
     });
 
     function toggleDateFilterPopover() {
@@ -321,7 +342,16 @@
       const snap = allSnapshots[i];
       if (!snap) return;
       stopMotionPoll();
-      currentSelectedSnap = snap;
+      
+      // Stop and clean up any video playback in progress
+      const vidPlayer = document.getElementById('modal-vid-player');
+      if (vidPlayer) {
+        vidPlayer.onerror = null;
+        vidPlayer.pause();
+        vidPlayer.removeAttribute('src');
+      }
+
+      currentModalIndex = i;
       const dt = formatDateTime(captureDate(snap));
 
       document.getElementById('modal-img').style.display = 'block';
@@ -348,11 +378,32 @@
       dlClip.setAttribute('download', downloadName(snap, 'mp4'));
       dlClip.style.display = 'inline-flex';
 
+      // 3. Update Modal Nav Buttons State
+      const list = getFilteredSnapshots();
+      const posInFiltered = list.indexOf(snap);
+      document.getElementById('modal-prev-btn').disabled = posInFiltered <= 0;
+      document.getElementById('modal-next-btn').disabled = posInFiltered >= list.length - 1 || posInFiltered === -1;
+
       document.getElementById('viewer-modal').style.display = 'flex';
     }
 
+    function navigateModal(direction) {
+      if (currentModalIndex < 0) return;
+      const list = getFilteredSnapshots();
+      const currentSnap = allSnapshots[currentModalIndex];
+      const posInFiltered = list.indexOf(currentSnap);
+      const nextPos = posInFiltered + direction;
+
+      if (nextPos >= 0 && nextPos < list.length) {
+        const nextSnap = list[nextPos];
+        const nextGlobalIndex = allSnapshots.indexOf(nextSnap);
+        openModal(nextGlobalIndex);
+      }
+    }
+
     async function fetchAndPlayMotion() {
-      if (!currentSelectedSnap) return;
+      if (currentModalIndex < 0) return;
+      const currentSelectedSnap = allSnapshots[currentModalIndex];
 
       const baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
       const mp4File = `${baseName}.mp4`;
@@ -366,7 +417,7 @@
       const startedAt = Date.now();
 
       const attempt = async () => {
-        if (currentSelectedSnap !== snapAtStart) return;
+        if (allSnapshots[currentModalIndex] !== snapAtStart) return;
         try {
           const res = await fetch(checkUrl, { cache: 'no-store' });
           const data = await res.json();
@@ -402,6 +453,8 @@
     }
 
     function startPlayback(mp4File) {
+      if (currentModalIndex < 0) return;
+      const currentSelectedSnap = allSnapshots[currentModalIndex];
       const modalImg = document.getElementById('modal-img');
       const vidWrap = document.getElementById('modal-vid-wrap');
       const vidPlayer = document.getElementById('modal-vid-player');
@@ -440,7 +493,7 @@
 
     function closeModal() {
       stopMotionPoll();
-      currentSelectedSnap = null;
+      currentModalIndex = -1;
       const vidPlayer = document.getElementById('modal-vid-player');
       if (vidPlayer) {
         vidPlayer.onerror = null;
@@ -449,8 +502,6 @@
       }
       document.getElementById('viewer-modal').style.display = 'none';
     }
-
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
   </script>
 </body>
 </html>
