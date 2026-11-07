@@ -170,7 +170,6 @@
     const PAGE_SIZE = 20;
     let currentPage = 0;   // 0 = newest 20
 
-    // Filenames start with the capture time (YYYYMMDD_HHMMSS) — the real moment the snap was taken
     function captureDate(snap) {
       const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(String(snap.filename || snap.key || ''));
       if (m) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
@@ -276,7 +275,6 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    // Left / right arrow keys page through history (when the viewer isn't open)
     document.addEventListener('keydown', (e) => {
       if (document.getElementById('viewer-modal').style.display === 'flex') return;
       if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
@@ -314,7 +312,6 @@
       return `/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&key=${encodeURIComponent(key)}`;
     }
 
-    // Friendly saved-file name, e.g. gate_2026-11-07_00-17-44.jpg (capture time)
     function downloadName(snap, ext) {
       const d = formatDateTime(captureDate(snap));
       return `${CAMERA}_${d.dateStr}_${d.timeStr.replace(/:/g, '-')}.${ext}`;
@@ -335,18 +332,28 @@
       playBtn.textContent = 'Play 10s Motion Clip';
       playBtn.disabled = false;
 
+      // 1. Prepare Snapshot Image & Download
       document.getElementById('modal-img').src = snapUrl(snap.key);
       document.getElementById('modal-time-label').textContent = dt.singleLine;
       document.getElementById('modal-dl-img').href =
         `${snapUrl(snap.key)}&download=1&name=${encodeURIComponent(downloadName(snap, 'jpg'))}`;
-      document.getElementById('modal-dl-clip').style.display = 'none';
+      
+      // 2. Prepare Motion Clip Download (.mp4 from motion directory)
+      const baseName = snap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
+      const mp4File = `${baseName}.mp4`;
+      const clipUrl = `/api/motion/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      
+      const dlClip = document.getElementById('modal-dl-clip');
+      dlClip.href = `${clipUrl}&download=1&name=${encodeURIComponent(downloadName(snap, 'mp4'))}`;
+      dlClip.setAttribute('download', downloadName(snap, 'mp4'));
+      dlClip.style.display = 'inline-flex';
+
       document.getElementById('viewer-modal').style.display = 'flex';
     }
 
     async function fetchAndPlayMotion() {
       if (!currentSelectedSnap) return;
 
-      // Extract base filename (e.g. "snap1") and map directly to ".mp4"
       const baseName = currentSelectedSnap.filename.replace(/\.(jpe?g|png|webp)$/i, '');
       const mp4File = `${baseName}.mp4`;
       const playBtn = document.getElementById('modal-play-action');
@@ -359,7 +366,7 @@
       const startedAt = Date.now();
 
       const attempt = async () => {
-        if (currentSelectedSnap !== snapAtStart) return;          // user moved on
+        if (currentSelectedSnap !== snapAtStart) return;
         try {
           const res = await fetch(checkUrl, { cache: 'no-store' });
           const data = await res.json();
@@ -406,28 +413,27 @@
 
       vidPlayer.onerror = () => {
         const code = vidPlayer.error && vidPlayer.error.code;
-        // 3 = decode error, 4 = format not supported (e.g. H.265/HEVC clip, or moov atom missing)
-        const msg = code === 4 || code === 3
+        const msg = (code === 4 || code === 3)
           ? 'This browser cannot decode the clip (camera codec not supported — needs H.264 MP4)'
           : 'Clip failed to load — retry';
         vidWrap.style.display = 'none';
         modalImg.style.display = 'block';
         playBtn.style.display = 'flex';
-        // Keep the clip download — an undecodable clip can still be saved and played in VLC
-        // (it is hidden only if the clip itself failed to load)
-        if (code !== 4 && code !== 3) document.getElementById('modal-dl-clip').style.display = 'none';
         playBtn.textContent = msg;
         playBtn.disabled = false;
       };
+
       const clipUrl = `/api/motion/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
       const dlClip = document.getElementById('modal-dl-clip');
+      
       dlClip.href = `${clipUrl}&download=1&name=${encodeURIComponent(downloadName(currentSelectedSnap, 'mp4'))}`;
+      dlClip.setAttribute('download', downloadName(currentSelectedSnap, 'mp4'));
       dlClip.style.display = 'inline-flex';
+
       vidPlayer.src = clipUrl;
       vidPlayer.muted = true;
       vidPlayer.load();
       vidPlayer.play().catch(err => {
-        // Autoplay blocked is fine — controls are visible, user can press play
         if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') console.warn('Playback error:', err);
       });
     }
