@@ -12,7 +12,14 @@ export default {
       // 1. COMPOSITE AUTHENTICATION: (location_id + username)
       // ------------------------------------------------------------
       if ((pathname === '/api/login' || pathname === '/api/auth/login') && request.method === 'POST') {
-        const body = await request.json().catch(() => ({}));
+        // Safe JSON parsing of request body
+        let body = {};
+        try {
+          body = await request.json();
+        } catch (e) {
+          return jsonResponse({ status: 'error', error: 'Invalid JSON request payload.' }, 400);
+        }
+
         const rawLoc = String(body.locationId || body.siteId || body.location || '').trim();
         const rawUser = String(body.username || body.user || '').trim();
         const password = String(body.password || '').trim();
@@ -21,12 +28,22 @@ export default {
           return jsonResponse({ status: 'error', error: 'Location ID, username, and password required.' }, 400);
         }
 
-        const user = await env.DB.prepare(
-          `SELECT * FROM users 
-           WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?)) 
-             AND TRIM(LOWER(username)) = TRIM(LOWER(?)) 
-           LIMIT 1`
-        ).bind(rawLoc, rawUser).first();
+        if (!env.DB) {
+          return jsonResponse({ status: 'error', error: 'Database binding (env.DB) is missing.' }, 500);
+        }
+
+        let user = null;
+        try {
+          user = await env.DB.prepare(
+            `SELECT * FROM users 
+             WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?)) 
+               AND TRIM(LOWER(username)) = TRIM(LOWER(?)) 
+             LIMIT 1`
+          ).bind(rawLoc, rawUser).first();
+        } catch (dbErr) {
+          console.error('Database query error:', dbErr);
+          return jsonResponse({ status: 'error', error: 'Database query failed: ' + dbErr.message }, 500);
+        }
 
         if (!user) {
           return jsonResponse({ status: 'error', error: `User "${rawUser}" not found at location "${rawLoc}".` }, 401);
@@ -38,13 +55,21 @@ export default {
         }
 
         const fixedLocationId = user.location_id.trim();
-        const locationMeta = await env.DB.prepare(
-          `SELECT location_id, description, address FROM locations WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?))`
-        ).bind(fixedLocationId).first() || { location_id: fixedLocationId, description: 'Facility' };
+        
+        let locationMeta = { location_id: fixedLocationId, description: 'Facility' };
+        try {
+          const locRes = await env.DB.prepare(
+            `SELECT location_id, description, address FROM locations WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?))`
+          ).bind(fixedLocationId).first();
+          if (locRes) locationMeta = locRes;
+        } catch (e) {}
 
-        const cameraRecords = await env.DB.prepare(
-          `SELECT camera_id, location_id, name FROM cameras WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?)) ORDER BY camera_id ASC`
-        ).bind(fixedLocationId).all();
+        let cameraRecords = { results: [] };
+        try {
+          cameraRecords = await env.DB.prepare(
+            `SELECT camera_id, location_id, name FROM cameras WHERE TRIM(UPPER(location_id)) = TRIM(UPPER(?)) ORDER BY camera_id ASC`
+          ).bind(fixedLocationId).all();
+        } catch (e) {}
 
         const cleanCameraList = (cameraRecords.results || []).length > 0
           ? cameraRecords.results.map(c => ({ name: (c.name || c.camera_id || 'apcam').trim() }))
@@ -95,7 +120,6 @@ export default {
 
         // 2. Not in R2: Drop request ticket marker for r2_watcher.py
         const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
-        // Only drop the marker once — the gallery polls this endpoint while waiting
         if (!(await env.MEDIA_BUCKET.head(markerKey))) {
           await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
             httpMetadata: { contentType: 'application/json' }
@@ -137,14 +161,19 @@ export default {
       // 4. SITES LISTING (/api/sites)
       // ------------------------------------------------------------
       if (pathname === '/api/sites' && request.method === 'GET') {
-        const rows = await env.DB.prepare(
-          `SELECT location_id, description, address FROM locations ORDER BY location_id ASC`
-        ).all();
+        let siteList = [];
+        if (env.DB) {
+          try {
+            const rows = await env.DB.prepare(
+              `SELECT location_id, description, address FROM locations ORDER BY location_id ASC`
+            ).all();
 
-        const siteList = (rows.results || []).map(r => ({
-          locationId: r.location_id,
-          label: r.description ? `${r.location_id} — ${r.description}` : r.location_id
-        }));
+            siteList = (rows.results || []).map(r => ({
+              locationId: r.location_id,
+              label: r.description ? `${r.location_id} — ${r.description}` : r.location_id
+            }));
+          } catch (e) {}
+        }
 
         return jsonResponse({ status: 'success', sites: siteList });
       }
@@ -162,7 +191,6 @@ export default {
         const prefix = `${rawLoc}/snapshots/${cameraName}/`;
         const requestedKey = url.searchParams.get('key');
 
-        // Direct fetch by exact key (used by gallery + live grid) — no listing needed
         let selectedKey = null;
         if (requestedKey) {
           if (!requestedKey.startsWith(prefix)) return jsonResponse({ error: 'Key does not match location/camera' }, 400);
@@ -198,7 +226,6 @@ export default {
         headers.set('Content-Type', object.httpMetadata?.contentType || 'image/jpeg');
         headers.set('ETag', object.httpEtag);
         headers.set('Access-Control-Allow-Origin', '*');
-        // By-key images are stable → let the browser cache them; "latest" must revalidate
         headers.set('Cache-Control', requestedKey ? 'private, max-age=86400' : 'no-cache');
         setDownloadHeader(headers, url, selectedKey.split('/').pop());
         if (!('body' in object) || !object.body) return new Response(null, { status: 304, headers });
@@ -210,12 +237,17 @@ export default {
       // ------------------------------------------------------------
       if (pathname === '/api/cameras' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
-        const rows = await env.DB.prepare(
-          `SELECT camera_id, name FROM cameras WHERE TRIM(UPPER(location_id)) = ? ORDER BY camera_id ASC`
-        ).bind(loc).all();
-        const cameras = (rows.results || [])
-          .map(c => String(c.name || c.camera_id || '').trim().toLowerCase())
-          .filter(Boolean);
+        let cameras = [];
+        if (env.DB) {
+          try {
+            const rows = await env.DB.prepare(
+              `SELECT camera_id, name FROM cameras WHERE TRIM(UPPER(location_id)) = ? ORDER BY camera_id ASC`
+            ).bind(loc).all();
+            cameras = (rows.results || [])
+              .map(c => String(c.name || c.camera_id || '').trim().toLowerCase())
+              .filter(Boolean);
+          } catch (e) {}
+        }
         return jsonResponse({ status: 'success', location: loc, cameras });
       }
 
@@ -233,8 +265,6 @@ export default {
         if (!requestedFile.endsWith('.mp4')) requestedFile += '.mp4';
         const targetKey = `${loc}/motion/${cameraName}/${requestedFile}`;
 
-        // Browsers always send "Range: bytes=0-" (open-ended) for <video>. R2 then reports
-        // range = { offset: 0 } with NO length, so we must resolve the real byte span ourselves.
         const head = await env.MEDIA_BUCKET.head(targetKey);
         if (!head) {
           return new Response(`Clip not found in R2: ${targetKey}`, { status: 404 });
@@ -298,7 +328,6 @@ export default {
   }
 };
 
-// ?download=1 (optionally &name=friendly.jpg) → browser saves the file instead of displaying it
 function setDownloadHeader(headers, url, fallbackName) {
   if (!url.searchParams.has('download')) return;
   const ext = (fallbackName.match(/\.[a-z0-9]+$/i) || [''])[0];
@@ -307,14 +336,12 @@ function setDownloadHeader(headers, url, fallbackName) {
   headers.set('Content-Disposition', `attachment; filename="${name}"`);
 }
 
-// Parse a single "bytes=a-b" / "bytes=a-" / "bytes=-n" Range header into { offset, length }.
-// Returns null when there is no (usable) range, 'invalid' when it can't be satisfied.
 function parseRange(header, size) {
   if (!header) return null;
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
   if (!m || (m[1] === '' && m[2] === '')) return null;
   let start, end;
-  if (m[1] === '') {                       // suffix: last n bytes
+  if (m[1] === '') {
     const n = parseInt(m[2], 10);
     if (n === 0) return 'invalid';
     start = Math.max(0, size - n);
@@ -327,15 +354,11 @@ function parseRange(header, size) {
   return { offset: start, length: end - start + 1 };
 }
 
-// Camera filenames start with the capture time (YYYYMMDD_HHMMSS…), which is the true order.
-// Upload time is not: the watcher can push a backlog in bursts / out of order.
 function captureTimeOf(key) {
   const m = /(\d{8})_(\d{6})/.exec(key.split('/').pop() || '');
   return m ? m[1] + m[2] : null;
 }
 
-// R2 list() returns keys in lexicographic order, max 1000 per page.
-// Walk every page, then sort newest-first by capture time (falling back to upload time).
 async function listImages(env, prefix) {
   const out = [];
   let cursor;
