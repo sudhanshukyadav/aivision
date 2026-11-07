@@ -75,12 +75,18 @@
       position: absolute; top: 16px; right: 20px; background: #1e293b; color: #fff; border: 1px solid #334155; width: 36px; height: 36px; border-radius: 50%; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
     }
     .modal-image { max-width: 90vw; max-height: 75vh; border-radius: 6px; border: 1px solid #334155; object-fit: contain; }
-    .modal-bar { margin-top: 14px; display: flex; align-items: center; gap: 16px; }
+    .modal-bar { margin-top: 14px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px 16px; }
     .modal-timestamp { font-size: 14px; color: #f8fafc; font-family: monospace; }
     .modal-play-btn {
       background: #0284c7; color: #fff; border: none; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;
     }
     .modal-play-btn:hover { background: #0369a1; }
+    .modal-dl-btn {
+      display: inline-flex; align-items: center; gap: 6px; background: #1e293b; color: #38bdf8;
+      border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+      text-decoration: none; transition: background 0.2s, color 0.2s;
+    }
+    .modal-dl-btn:hover { background: #334155; color: #f8fafc; }
     .modal-video-wrap { display: none; width: 90vw; max-width: 1080px; max-height: 75vh; background: #000; border-radius: 6px; overflow: hidden; border: 1px solid #334155; }
     .modal-video-wrap video { width: 100%; height: 100%; max-height: 75vh; display: block; }
     .pager {
@@ -144,6 +150,8 @@
       <button class="modal-play-btn" id="modal-play-action" onclick="fetchAndPlayMotion()">
         Play 10s Motion Clip
       </button>
+      <a class="modal-dl-btn" id="modal-dl-img" href="#" title="Save this snapshot"><span aria-hidden="true">&#11015;</span> Image</a>
+      <a class="modal-dl-btn" id="modal-dl-clip" href="#" title="Save this motion clip" style="display: none;"><span aria-hidden="true">&#11015;</span> Clip</a>
     </div>
   </div>
 
@@ -306,6 +314,12 @@
       return `/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&key=${encodeURIComponent(key)}`;
     }
 
+    // Friendly saved-file name, e.g. gate_2026-11-07_00-17-44.jpg (capture time)
+    function downloadName(snap, ext) {
+      const d = formatDateTime(captureDate(snap));
+      return `${CAMERA}_${d.dateStr}_${d.timeStr.replace(/:/g, '-')}.${ext}`;
+    }
+
     function openModal(i) {
       const snap = allSnapshots[i];
       if (!snap) return;
@@ -323,6 +337,9 @@
 
       document.getElementById('modal-img').src = snapUrl(snap.key);
       document.getElementById('modal-time-label').textContent = dt.singleLine;
+      document.getElementById('modal-dl-img').href =
+        `${snapUrl(snap.key)}&download=1&name=${encodeURIComponent(downloadName(snap, 'jpg'))}`;
+      document.getElementById('modal-dl-clip').style.display = 'none';
       document.getElementById('viewer-modal').style.display = 'flex';
     }
 
@@ -396,10 +413,17 @@
         vidWrap.style.display = 'none';
         modalImg.style.display = 'block';
         playBtn.style.display = 'flex';
+        // Keep the clip download — an undecodable clip can still be saved and played in VLC
+        // (it is hidden only if the clip itself failed to load)
+        if (code !== 4 && code !== 3) document.getElementById('modal-dl-clip').style.display = 'none';
         playBtn.textContent = msg;
         playBtn.disabled = false;
       };
-      vidPlayer.src = `/api/motion/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      const clipUrl = `/api/motion/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      const dlClip = document.getElementById('modal-dl-clip');
+      dlClip.href = `${clipUrl}&download=1&name=${encodeURIComponent(downloadName(currentSelectedSnap, 'mp4'))}`;
+      dlClip.style.display = 'inline-flex';
+      vidPlayer.src = clipUrl;
       vidPlayer.muted = true;
       vidPlayer.load();
       vidPlayer.play().catch(err => {

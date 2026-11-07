@@ -200,6 +200,7 @@ export default {
         headers.set('Access-Control-Allow-Origin', '*');
         // By-key images are stable → let the browser cache them; "latest" must revalidate
         headers.set('Cache-Control', requestedKey ? 'private, max-age=86400' : 'no-cache');
+        setDownloadHeader(headers, url, selectedKey.split('/').pop());
         if (!('body' in object) || !object.body) return new Response(null, { status: 304, headers });
         return new Response(object.body, { headers });
       }
@@ -247,6 +248,7 @@ export default {
         headers.set('Accept-Ranges', 'bytes');
         headers.set('Cache-Control', 'public, max-age=86400');
         headers.set('ETag', head.httpEtag);
+        setDownloadHeader(headers, url, requestedFile);
 
         const span = parseRange(request.headers.get('Range'), size);
         if (span === 'invalid') {
@@ -295,6 +297,15 @@ export default {
     }
   }
 };
+
+// ?download=1 (optionally &name=friendly.jpg) → browser saves the file instead of displaying it
+function setDownloadHeader(headers, url, fallbackName) {
+  if (!url.searchParams.has('download')) return;
+  const ext = (fallbackName.match(/\.[a-z0-9]+$/i) || [''])[0];
+  let name = (url.searchParams.get('name') || fallbackName).replace(/[^\w.\-]+/g, '_').slice(0, 120);
+  if (ext && !name.toLowerCase().endsWith(ext.toLowerCase())) name += ext;
+  headers.set('Content-Disposition', `attachment; filename="${name}"`);
+}
 
 // Parse a single "bytes=a-b" / "bytes=a-" / "bytes=-n" Range header into { offset, length }.
 // Returns null when there is no (usable) range, 'invalid' when it can't be satisfied.
