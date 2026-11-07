@@ -305,7 +305,45 @@ export default {
         headers.set('Content-Length', String(size));
         return new Response(videoObject.body, { status: 200, headers });
       }
+// ------------------------------------------------------------
+      // ADMIN TABLES ENDPOINT (/api/admin/tables)
+      // ------------------------------------------------------------
+      if (pathname === '/api/admin/tables' && request.method === 'GET') {
+        if (!env.DB) {
+          return jsonResponse({ status: 'error', error: 'Database binding (env.DB) missing' }, 500);
+        }
 
+        try {
+          // Query D1 SQLite master schema for tables
+          const tablesQuery = await env.DB.prepare(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name ASC`
+          ).all();
+
+          const tables = (tablesQuery.results || []).map(t => t.name);
+          return jsonResponse({ status: 'success', tables });
+        } catch (err) {
+          return jsonResponse({ status: 'error', error: err.message || 'Failed to list tables' }, 500);
+        }
+      }
+
+      // ------------------------------------------------------------
+      // ADMIN USERS ENDPOINT (/api/admin/users)
+      // ------------------------------------------------------------
+      if (pathname === '/api/admin/users' && request.method === 'GET') {
+        if (!env.DB) {
+          return jsonResponse({ status: 'error', error: 'Database binding (env.DB) missing' }, 500);
+        }
+
+        try {
+          const usersQuery = await env.DB.prepare(
+            `SELECT user_id, location_id, username, role FROM users ORDER BY user_id ASC`
+          ).all();
+
+          return jsonResponse({ status: 'success', users: usersQuery.results || [] });
+        } catch (err) {
+          return jsonResponse({ status: 'error', error: err.message || 'Failed to list users' }, 500);
+        }
+      }
       // ------------------------------------------------------------
       // 7. STATIC SPA SERVING
       // ------------------------------------------------------------
