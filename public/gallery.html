@@ -83,6 +83,19 @@
     .modal-play-btn:hover { background: #0369a1; }
     .modal-video-wrap { display: none; width: 90vw; max-width: 1080px; max-height: 75vh; background: #000; border-radius: 6px; overflow: hidden; border: 1px solid #334155; }
     .modal-video-wrap video { width: 100%; height: 100%; max-height: 75vh; display: block; }
+    .pager {
+      position: sticky; bottom: 0; z-index: 40; display: flex; align-items: center; justify-content: center; gap: 14px;
+      padding: 10px 16px; background: #0f172a; border-top: 1px solid #1e293b;
+    }
+    .pager-btn {
+      display: inline-flex; align-items: center; gap: 6px; background: #1e293b; color: #38bdf8;
+      border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .pager-btn:hover:not(:disabled) { background: #334155; color: #f8fafc; }
+    .pager-btn:disabled { opacity: 0.35; cursor: default; }
+    .pager-btn .tri { font-size: 10px; }
+    .pager-info { font-size: 12px; color: #94a3b8; font-family: monospace; min-width: 150px; text-align: center; }
     .empty-state { grid-column: 1 / -1; text-align: center; color: #64748b; margin-top: 80px; font-size: 14px; }
   </style>
 </head>
@@ -91,7 +104,7 @@
     <div class="bar-left">
       <span class="cam-title" id="cam-header-title">CAMERA</span>
       <span class="site-full-name" id="site-header-name">Loading Site…</span>
-      <a href="/live.html" class="back-btn-icon" title="Return to Live Grid">&larr;</a>
+      <a href="/live.html" class="back-btn-icon" title="Return to Live Grid"><span aria-hidden="true" style="font-size: 11px;">&#9664;</span></a>
     </div>
 
     <div class="bar-right">
@@ -113,6 +126,12 @@
   </header>
 
   <main class="gallery-container" id="gallery-grid"></main>
+
+  <nav class="pager" id="pager" style="display: none;" aria-label="Snapshot pages">
+    <button class="pager-btn" id="pager-prev" onclick="changePage(-1)" title="Newer snapshots"><span class="tri" aria-hidden="true">&#9664;</span> Newer</button>
+    <span class="pager-info" id="pager-info"></span>
+    <button class="pager-btn" id="pager-next" onclick="changePage(1)" title="Older snapshots">Older <span class="tri" aria-hidden="true">&#9654;</span></button>
+  </nav>
 
   <div class="modal-overlay" id="viewer-modal">
     <button class="modal-close" onclick="closeModal()">&times;</button>
@@ -140,6 +159,15 @@
     let allSnapshots = [];
     let currentFilterDate = null;
     let currentSelectedSnap = null;
+    const PAGE_SIZE = 20;
+    let currentPage = 0;   // 0 = newest 20
+
+    // Filenames start with the capture time (YYYYMMDD_HHMMSS) — the real moment the snap was taken
+    function captureDate(snap) {
+      const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(String(snap.filename || snap.key || ''));
+      if (m) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+      return new Date(snap.uploaded);
+    }
 
     document.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('cam-header-title').textContent = CAMERA.toUpperCase();
@@ -191,18 +219,23 @@
       const grid = document.getElementById('gallery-grid');
       let filtered = allSnapshots;
       if (currentFilterDate) {
-        filtered = allSnapshots.filter(s => formatDateTime(new Date(s.uploaded)).dateStr === currentFilterDate);
+        filtered = allSnapshots.filter(s => formatDateTime(captureDate(s)).dateStr === currentFilterDate);
       }
 
       document.getElementById('snap-count').textContent = `${filtered.length} Snaps`;
+
+      const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+      currentPage = Math.min(Math.max(0, currentPage), pageCount - 1);
+      renderPager(filtered.length, pageCount);
 
       if (filtered.length === 0) {
         grid.innerHTML = `<div class="empty-state">No snapshots found for this date.</div>`;
         return;
       }
 
-      grid.innerHTML = filtered.map((s, idx) => {
-        const dt = formatDateTime(new Date(s.uploaded));
+      const pageItems = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+      grid.innerHTML = pageItems.map((s, idx) => {
+        const dt = formatDateTime(captureDate(s));
         const imgUrl = snapUrl(s.key);
 
         return `
@@ -218,6 +251,31 @@
       }).join('');
     }
 
+    function renderPager(total, pageCount) {
+      const pager = document.getElementById('pager');
+      if (total <= PAGE_SIZE) { pager.style.display = 'none'; return; }
+      pager.style.display = 'flex';
+      const from = currentPage * PAGE_SIZE + 1;
+      const to = Math.min(total, (currentPage + 1) * PAGE_SIZE);
+      document.getElementById('pager-info').textContent = `${from}–${to} of ${total} · page ${currentPage + 1}/${pageCount}`;
+      document.getElementById('pager-prev').disabled = currentPage === 0;
+      document.getElementById('pager-next').disabled = currentPage >= pageCount - 1;
+    }
+
+    function changePage(delta) {
+      currentPage += delta;
+      renderSnapshotsGrid();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // Left / right arrow keys page through history (when the viewer isn't open)
+    document.addEventListener('keydown', (e) => {
+      if (document.getElementById('viewer-modal').style.display === 'flex') return;
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+      if (e.key === 'ArrowLeft' && !document.getElementById('pager-prev').disabled) changePage(-1);
+      if (e.key === 'ArrowRight' && !document.getElementById('pager-next').disabled) changePage(1);
+    });
+
     function toggleDateFilterPopover() {
       const popover = document.getElementById('date-filter-popover');
       popover.style.display = popover.style.display === 'flex' ? 'none' : 'flex';
@@ -230,6 +288,7 @@
       document.getElementById('filter-btn-label').textContent = val;
       document.getElementById('toggle-filter-btn').classList.add('active');
       toggleDateFilterPopover();
+      currentPage = 0;
       renderSnapshotsGrid();
     }
 
@@ -239,6 +298,7 @@
       document.getElementById('filter-btn-label').textContent = 'Filter Date';
       document.getElementById('toggle-filter-btn').classList.remove('active');
       toggleDateFilterPopover();
+      currentPage = 0;
       renderSnapshotsGrid();
     }
 
@@ -251,7 +311,7 @@
       if (!snap) return;
       stopMotionPoll();
       currentSelectedSnap = snap;
-      const dt = formatDateTime(new Date(snap.uploaded));
+      const dt = formatDateTime(captureDate(snap));
 
       document.getElementById('modal-img').style.display = 'block';
       document.getElementById('modal-vid-wrap').style.display = 'none';
