@@ -221,7 +221,7 @@ export default {
       // ------------------------------------------------------------
       // 6. MOTION VIDEO STREAMING WITH BYTE RANGE (/api/motion/latest)
       // ------------------------------------------------------------
-      if (pathname === '/api/motion/latest' && request.method === 'GET') {
+      if (pathname === '/api/motion/latest' && (request.method === 'GET' || request.method === 'HEAD')) {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
         const cameraName = (url.searchParams.get('cam') || 'apcam').trim().toLowerCase();
         let requestedFile = url.searchParams.get('file');
@@ -232,29 +232,45 @@ export default {
         if (!requestedFile.endsWith('.mp4')) requestedFile += '.mp4';
         const targetKey = `${loc}/motion/${cameraName}/${requestedFile}`;
 
-        const rangeHeader = request.headers.get('Range');
-        const videoObject = await env.MEDIA_BUCKET.get(targetKey, {
-          range: rangeHeader ? request.headers : undefined
-        });
-
-        if (!videoObject) {
+        // Browsers always send "Range: bytes=0-" (open-ended) for <video>. R2 then reports
+        // range = { offset: 0 } with NO length, so we must resolve the real byte span ourselves.
+        const head = await env.MEDIA_BUCKET.head(targetKey);
+        if (!head) {
           return new Response(`Clip not found in R2: ${targetKey}`, { status: 404 });
         }
+        const size = head.size;
 
         const headers = new Headers();
         headers.set('Content-Type', 'video/mp4');
         headers.set('Access-Control-Allow-Origin', '*');
+        headers.set('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
         headers.set('Accept-Ranges', 'bytes');
         headers.set('Cache-Control', 'public, max-age=86400');
+        headers.set('ETag', head.httpEtag);
 
-        if (rangeHeader && videoObject.range) {
-          const range = videoObject.range;
-          headers.set('Content-Range', `bytes ${range.offset}-${range.offset + range.length - 1}/${videoObject.size}`);
-          headers.set('Content-Length', String(range.length));
+        const span = parseRange(request.headers.get('Range'), size);
+        if (span === 'invalid') {
+          headers.set('Content-Range', `bytes */${size}`);
+          return new Response(null, { status: 416, headers });
+        }
+
+        if (request.method === 'HEAD') {
+          headers.set('Content-Length', String(span ? span.length : size));
+          return new Response(null, { status: span ? 206 : 200, headers });
+        }
+
+        const videoObject = await env.MEDIA_BUCKET.get(targetKey, span ? { range: span } : undefined);
+        if (!videoObject) {
+          return new Response(`Clip not found in R2: ${targetKey}`, { status: 404 });
+        }
+
+        if (span) {
+          headers.set('Content-Range', `bytes ${span.offset}-${span.offset + span.length - 1}/${size}`);
+          headers.set('Content-Length', String(span.length));
           return new Response(videoObject.body, { status: 206, headers });
         }
 
-        headers.set('Content-Length', String(videoObject.size));
+        headers.set('Content-Length', String(size));
         return new Response(videoObject.body, { status: 200, headers });
       }
 
@@ -280,8 +296,35 @@ export default {
   }
 };
 
+// Parse a single "bytes=a-b" / "bytes=a-" / "bytes=-n" Range header into { offset, length }.
+// Returns null when there is no (usable) range, 'invalid' when it can't be satisfied.
+function parseRange(header, size) {
+  if (!header) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!m || (m[1] === '' && m[2] === '')) return null;
+  let start, end;
+  if (m[1] === '') {                       // suffix: last n bytes
+    const n = parseInt(m[2], 10);
+    if (n === 0) return 'invalid';
+    start = Math.max(0, size - n);
+    end = size - 1;
+  } else {
+    start = parseInt(m[1], 10);
+    end = m[2] === '' ? size - 1 : Math.min(parseInt(m[2], 10), size - 1);
+  }
+  if (start >= size || end < start) return 'invalid';
+  return { offset: start, length: end - start + 1 };
+}
+
+// Camera filenames start with the capture time (YYYYMMDD_HHMMSS…), which is the true order.
+// Upload time is not: the watcher can push a backlog in bursts / out of order.
+function captureTimeOf(key) {
+  const m = /(\d{8})_(\d{6})/.exec(key.split('/').pop() || '');
+  return m ? m[1] + m[2] : null;
+}
+
 // R2 list() returns keys in lexicographic order, max 1000 per page.
-// Walk every page so "latest" is truly the newest upload, then sort newest-first.
+// Walk every page, then sort newest-first by capture time (falling back to upload time).
 async function listImages(env, prefix) {
   const out = [];
   let cursor;
@@ -292,7 +335,11 @@ async function listImages(env, prefix) {
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  out.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+  out.sort((a, b) => {
+    const ca = captureTimeOf(a.key), cb = captureTimeOf(b.key);
+    if (ca && cb && ca !== cb) return ca < cb ? 1 : -1;
+    return new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime();
+  });
   return out;
 }
 

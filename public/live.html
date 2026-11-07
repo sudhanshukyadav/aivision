@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Camera Grid - AISYS Monitoring</title>
+  <title>Latest Happenings - AISYS Monitoring</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -35,6 +35,10 @@
     }
     .back-to-landing-btn:hover { background: #334155; color: #f8fafc; }
     .page-title { font-size: 16px; font-weight: 700; color: #f8fafc; letter-spacing: 0.5px; }
+    h1.page-title { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .title-at { color: #64748b; font-weight: 500; margin: 0 2px; }
+    .title-site { color: #38bdf8; letter-spacing: 0; }
+    .bar-left { min-width: 0; }
     .site-badge { font-size: 12px; color: #38bdf8; background: #1e293b; padding: 3px 10px; border-radius: 4px; border: 1px solid #334155; font-weight: 600; }
     
     .grid-container {
@@ -79,15 +83,18 @@
       display: flex; justify-content: space-between; align-items: center;
     }
     .time-val { color: #38bdf8; font-weight: 600; }
+    .feed-age { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+    .feed-age.ok { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+    .feed-age.stale { color: #fbbf24; background: rgba(251, 191, 36, 0.12); }
+    .feed-age.none { color: #64748b; }
     .empty-notice { grid-column: 1 / -1; text-align: center; color: #64748b; padding: 40px; font-size: 14px; }
   </style>
 </head>
 <body>
   <header class="top-bar">
     <div class="bar-left">
-      <a href="/" class="back-to-landing-btn" title="Return to Landing Page">&larr; Home</a>
-      <span class="page-title">LIVE MONITORING</span>
-      <span class="site-badge" id="site-display">HQ-AD</span>
+      <a href="/" class="back-to-landing-btn" title="Return to Landing Page"><span aria-hidden="true" style="font-size: 10px;">&#9664;</span> Home</a>
+      <h1 class="page-title">LATEST HAPPENINGS <span class="title-at">@</span> <span class="title-site" id="site-display"></span></h1>
     </div>
   </header>
 
@@ -110,6 +117,8 @@
     const POLL_MS = 5000;
     const SLOTS = 4;
     const NO_SNAP_SVG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'><rect width='100%' height='100%' fill='%23030712'/><text x='50%' y='50%' fill='%2364748b' font-size='11' text-anchor='middle'>No Snap</text></svg>";
+    const STALE_MS = 2 * 60 * 1000;   // newest snap older than this → feed is not updating
+    const newestAt = {};    // cam -> Date of newest snapshot
     const shownKeys = {};   // cam -> [key per slot], so unchanged images are never re-downloaded
 
     document.addEventListener('DOMContentLoaded', async () => {
@@ -120,18 +129,28 @@
       setInterval(() => { if (!document.hidden) refreshAll(cameras); }, POLL_MS);
     });
 
-    function resolveLocationLabel() {
+    // Show the site's full description (and address when known) instead of the site code
+    async function resolveLocationLabel() {
       const displayElem = document.getElementById('site-display');
-      if (session.location) {
-        if (typeof session.location === 'object' && session.location.description) {
-          displayElem.textContent = session.location.description;
-          return;
-        } else if (typeof session.location === 'string') {
-          displayElem.textContent = session.location;
-          return;
+      const show = (desc, addr) => {
+        displayElem.textContent = addr ? `${desc} — ${addr}` : desc;
+        displayElem.title = `Site ${LOCATION_CODE}`;
+      };
+      const loc = session.location;
+      if (loc && typeof loc === 'object' && loc.description) return show(loc.description, loc.address);
+      if (typeof loc === 'string' && loc && loc.toUpperCase() !== LOCATION_CODE) return show(loc);
+      try {
+        const res = await fetch('/api/sites');
+        if (res.ok) {
+          const data = await res.json();
+          const match = (data.sites || []).find(x => String(x.locationId).toUpperCase() === LOCATION_CODE);
+          if (match && match.label) {
+            const parts = match.label.split('—');
+            return show(parts.length > 1 ? parts.slice(1).join('—').trim() : match.label);
+          }
         }
-      }
-      displayElem.textContent = LOCATION_CODE;
+      } catch (e) {}
+      show(LOCATION_CODE);
     }
 
     function formatTimestamp(dateObj) {
@@ -141,6 +160,33 @@
         dateStr: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
         timeStr: `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
       };
+    }
+
+    // Filenames start with the capture time (YYYYMMDD_HHMMSS); prefer that over the R2 upload time
+    function captureDate(snap) {
+      const m = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(String(snap.key).split('/').pop());
+      if (m) return new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+      return new Date(snap.uploaded);
+    }
+
+    function ageText(ms) {
+      const s = Math.max(0, Math.round(ms / 1000));
+      if (s < 60) return `${s}s ago`;
+      if (s < 3600) return `${Math.round(s / 60)}m ago`;
+      if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+      return `${Math.round(s / 86400)}d ago`;
+    }
+
+    function updateAgeBadge(cam) {
+      const el = document.getElementById(`age-${cam}`);
+      if (!el) return;
+      const d = newestAt[cam];
+      if (!d) { el.className = 'feed-age none'; el.textContent = 'no snapshots'; return; }
+      const age = Date.now() - d.getTime();
+      const stale = age > STALE_MS;
+      el.className = `feed-age ${stale ? 'stale' : 'ok'}`;
+      el.textContent = stale ? `⚠ last snap ${ageText(age)}` : `live · ${ageText(age)}`;
+      el.title = stale ? 'No new snapshots are reaching the cloud — check that r2_watcher.py is running on the site PC.' : '';
     }
 
     function camId(c) {
@@ -186,7 +232,7 @@
         return `
           <div class="cam-card">
             <div class="cam-header">
-              <span class="cam-name">${cam}</span>
+              <span><span class="cam-name">${cam}</span><span class="feed-age none" id="age-${cam}">no snapshots</span></span>
               <a href="${historyUrl}" class="cam-history-btn">History</a>
             </div>
             <div class="snaps-grid-4">${slots}</div>
@@ -205,6 +251,9 @@
         if (!res.ok) return;
         const data = await res.json();
         const snaps = data.snapshots || [];
+        // Staleness uses the R2 upload time (UTC, timezone-safe): it is when the snap reached the cloud
+        newestAt[cam] = snaps[0] ? new Date(snaps[0].uploaded) : null;
+        updateAgeBadge(cam);
         const prev = shownKeys[cam] || [];
         for (let i = 0; i < SLOTS; i++) {
           const snap = snaps[i];
@@ -217,7 +266,7 @@
           }
           if (prev[i] === snap.key) continue;
           img.src = `/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(cam)}&key=${encodeURIComponent(snap.key)}`;
-          const t = formatTimestamp(snap.uploaded);
+          const t = formatTimestamp(captureDate(snap));
           ts.innerHTML = `<span>${t.dateStr}</span><span class="time-val">${t.timeStr}</span>`;
         }
         shownKeys[cam] = snaps.map(s => s.key);

@@ -294,7 +294,7 @@
           const waited = Math.round((Date.now() - startedAt) / 1000);
           if (waited >= MOTION_TIMEOUT_S) {
             stopMotionPoll();
-            playBtn.textContent = 'Clip not available — retry';
+            playBtn.textContent = 'Site PC did not upload the clip (is r2_watcher running?) — retry';
             playBtn.disabled = false;
             return;
           }
@@ -327,9 +327,25 @@
       playBtn.style.display = 'none';
       vidWrap.style.display = 'block';
 
-      vidPlayer.src = `/api/motion/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      vidPlayer.onerror = () => {
+        const code = vidPlayer.error && vidPlayer.error.code;
+        // 3 = decode error, 4 = format not supported (e.g. H.265/HEVC clip, or moov atom missing)
+        const msg = code === 4 || code === 3
+          ? 'This browser cannot decode the clip (camera codec not supported — needs H.264 MP4)'
+          : 'Clip failed to load — retry';
+        vidWrap.style.display = 'none';
+        modalImg.style.display = 'block';
+        playBtn.style.display = 'flex';
+        playBtn.textContent = msg;
+        playBtn.disabled = false;
+      };
+      vidPlayer.src = `/api/motion/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
       vidPlayer.muted = true;
-      vidPlayer.play().catch(() => {});
+      vidPlayer.load();
+      vidPlayer.play().catch(err => {
+        // Autoplay blocked is fine — controls are visible, user can press play
+        if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') console.warn('Playback error:', err);
+      });
     }
 
     function closeModal() {
@@ -337,6 +353,7 @@
       currentSelectedSnap = null;
       const vidPlayer = document.getElementById('modal-vid-player');
       if (vidPlayer) {
+        vidPlayer.onerror = null;
         vidPlayer.pause();
         vidPlayer.removeAttribute('src');
       }
