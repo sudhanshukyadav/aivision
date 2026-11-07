@@ -107,11 +107,17 @@
     }
 
     const LOCATION_CODE = (session.locationId || session.location_id || 'HQ-AD').toUpperCase();
+    const POLL_MS = 5000;
+    const SLOTS = 4;
+    const NO_SNAP_SVG = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'><rect width='100%' height='100%' fill='%23030712'/><text x='50%' y='50%' fill='%2364748b' font-size='11' text-anchor='middle'>No Snap</text></svg>";
+    const shownKeys = {};   // cam -> [key per slot], so unchanged images are never re-downloaded
 
     document.addEventListener('DOMContentLoaded', async () => {
       resolveLocationLabel();
-      await loadLiveCameras();
-      setInterval(loadLiveCameras, 5000);
+      const cameras = await resolveCameras();
+      renderGrid(cameras);
+      await refreshAll(cameras);
+      setInterval(() => { if (!document.hidden) refreshAll(cameras); }, POLL_MS);
     });
 
     function resolveLocationLabel() {
@@ -129,7 +135,7 @@
     }
 
     function formatTimestamp(dateObj) {
-      const d = dateObj ? new Date(dateObj) : new Date();
+      const d = new Date(dateObj);
       const pad = n => String(n).padStart(2, '0');
       return {
         dateStr: `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,
@@ -137,59 +143,87 @@
       };
     }
 
-    async function loadLiveCameras() {
-      const grid = document.getElementById('camera-grid');
-      let cameras = ['gate', 'apcam'];
+    function camId(c) {
+      return String((c && (c.name || c.camera_id)) || c || '').trim().toLowerCase();
+    }
 
+    // Cameras: session (from login) → /api/cameras → fallback defaults
+    async function resolveCameras() {
+      const fromSession = (session.cameras || []).map(camId).filter(Boolean);
+      if (fromSession.length) return fromSession;
       try {
-        const res = await fetch(`/api/cameras?location=${LOCATION_CODE}`);
+        const res = await fetch(`/api/cameras?location=${encodeURIComponent(LOCATION_CODE)}`);
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data.cameras) && data.cameras.length > 0) {
-            cameras = data.cameras;
-          }
+          const list = (data.cameras || []).map(camId).filter(Boolean);
+          if (list.length) return list;
         }
       } catch (err) {
-        console.warn("Using default edge camera nodes:", err);
+        console.warn('Camera list unavailable, using defaults:', err);
       }
+      return ['gate', 'apcam'];
+    }
 
+    // Build the grid ONCE; polling only swaps image src / timestamps.
+    function renderGrid(cameras) {
+      const grid = document.getElementById('camera-grid');
       if (cameras.length === 0) {
         grid.innerHTML = `<div class="empty-notice">No active camera feeds discovered for ${LOCATION_CODE}.</div>`;
         return;
       }
-
-      // Render camera cards with 4 latest snapshot slots per camera
-      grid.innerHTML = await Promise.all(cameras.map(async (cam) => {
-        const historyUrl = `/gallery.html?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}`;
-        
-        let snapsHTML = '';
-        for (let i = 0; i < 4; i++) {
-          const imgUrl = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(cam)}&index=${i}&t=${Date.now()}`;
-          const now = formatTimestamp();
-
-          snapsHTML += `
+      grid.innerHTML = cameras.map(cam => {
+        const historyUrl = `/gallery.html?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(cam)}`;
+        let slots = '';
+        for (let i = 0; i < SLOTS; i++) {
+          slots += `
             <div class="snap-wrapper">
-              <img src="${imgUrl}" alt="${cam} snap ${i}" onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100%\' height=\'100%\' viewBox=\'0 0 320 180\'><rect width=\'100%\' height=\'100%\' fill=\'%23030712\'/><text x=\'50%\' y=\'50%\' fill=\'%2364748b\' font-size=\'11\' text-anchor=\'middle\'>No Snap</text></svg>'" />
-              <div class="snap-timestamp-overlay">
-                <span>${now.dateStr}</span>
-                <span class="time-val">${now.timeStr}</span>
+              <img id="snap-${cam}-${i}" src="${NO_SNAP_SVG}" alt="${cam} snap ${i}" />
+              <div class="snap-timestamp-overlay" id="ts-${cam}-${i}">
+                <span>--</span><span class="time-val">--:--:--</span>
               </div>
-            </div>
-          `;
+            </div>`;
         }
-
         return `
           <div class="cam-card">
             <div class="cam-header">
               <span class="cam-name">${cam}</span>
               <a href="${historyUrl}" class="cam-history-btn">History</a>
             </div>
-            <div class="snaps-grid-4">
-              ${snapsHTML}
-            </div>
-          </div>
-        `;
-      })).then(results => results.join(''));
+            <div class="snaps-grid-4">${slots}</div>
+          </div>`;
+      }).join('');
+    }
+
+    async function refreshAll(cameras) {
+      await Promise.all(cameras.map(refreshCamera));
+    }
+
+    // One small JSON call per camera; images are fetched only when their key changes.
+    async function refreshCamera(cam) {
+      try {
+        const res = await fetch(`/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(cam)}&json=1&count=${SLOTS}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const snaps = data.snapshots || [];
+        const prev = shownKeys[cam] || [];
+        for (let i = 0; i < SLOTS; i++) {
+          const snap = snaps[i];
+          const img = document.getElementById(`snap-${cam}-${i}`);
+          const ts = document.getElementById(`ts-${cam}-${i}`);
+          if (!img || !ts) continue;
+          if (!snap) {
+            if (prev[i]) { img.src = NO_SNAP_SVG; ts.innerHTML = '<span>--</span><span class="time-val">--:--:--</span>'; }
+            continue;
+          }
+          if (prev[i] === snap.key) continue;
+          img.src = `/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(cam)}&key=${encodeURIComponent(snap.key)}`;
+          const t = formatTimestamp(snap.uploaded);
+          ts.innerHTML = `<span>${t.dateStr}</span><span class="time-val">${t.timeStr}</span>`;
+        }
+        shownKeys[cam] = snaps.map(s => s.key);
+      } catch (err) {
+        console.warn(`Refresh failed for ${cam}:`, err);
+      }
     }
   </script>
 </body>

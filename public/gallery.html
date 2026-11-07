@@ -203,10 +203,10 @@
 
       grid.innerHTML = filtered.map((s, idx) => {
         const dt = formatDateTime(new Date(s.uploaded));
-        const imgUrl = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&index=${idx}`;
+        const imgUrl = snapUrl(s.key);
 
         return `
-          <div class="thumb-card" onclick="openModal('${s.filename}', '${s.uploaded}', ${idx})">
+          <div class="thumb-card" onclick="openModal(${allSnapshots.indexOf(s)})">
             <div class="thumb-wrapper">
               <img src="${imgUrl}" alt="${s.filename}" loading="lazy" />
             </div>
@@ -242,9 +242,16 @@
       renderSnapshotsGrid();
     }
 
-    function openModal(filename, uploadedStr, index) {
-      currentSelectedSnap = { filename, uploadedStr, index };
-      const dt = formatDateTime(new Date(uploadedStr));
+    function snapUrl(key) {
+      return `/api/snapshot/latest?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&key=${encodeURIComponent(key)}`;
+    }
+
+    function openModal(i) {
+      const snap = allSnapshots[i];
+      if (!snap) return;
+      stopMotionPoll();
+      currentSelectedSnap = snap;
+      const dt = formatDateTime(new Date(snap.uploaded));
 
       document.getElementById('modal-img').style.display = 'block';
       document.getElementById('modal-vid-wrap').style.display = 'none';
@@ -254,7 +261,7 @@
       playBtn.textContent = 'Play 10s Motion Clip';
       playBtn.disabled = false;
 
-      document.getElementById('modal-img').src = `/api/snapshot/latest?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&index=${index}`;
+      document.getElementById('modal-img').src = snapUrl(snap.key);
       document.getElementById('modal-time-label').textContent = dt.singleLine;
       document.getElementById('viewer-modal').style.display = 'flex';
     }
@@ -270,24 +277,44 @@
       playBtn.disabled = true;
       playBtn.textContent = 'Checking cloud cache…';
 
-      try {
-        const checkRes = await fetch(`/api/motion/check?location=${LOCATION_CODE}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`);
-        const statusData = await checkRes.json();
+      const checkUrl = `/api/motion/check?location=${encodeURIComponent(LOCATION_CODE)}&cam=${encodeURIComponent(CAMERA)}&file=${encodeURIComponent(mp4File)}`;
+      const snapAtStart = currentSelectedSnap;
+      const startedAt = Date.now();
 
-        // If file exists in R2, play immediately
-        if (statusData.status === 'ready') {
-          startPlayback(mp4File);
-          return;
+      const attempt = async () => {
+        if (currentSelectedSnap !== snapAtStart) return;          // user moved on
+        try {
+          const res = await fetch(checkUrl, { cache: 'no-store' });
+          const data = await res.json();
+          if (data.status === 'ready') {
+            stopMotionPoll();
+            startPlayback(mp4File);
+            return;
+          }
+          const waited = Math.round((Date.now() - startedAt) / 1000);
+          if (waited >= MOTION_TIMEOUT_S) {
+            stopMotionPoll();
+            playBtn.textContent = 'Clip not available — retry';
+            playBtn.disabled = false;
+            return;
+          }
+          playBtn.textContent = `Fetching from site… ${waited}s`;
+          motionPollTimer = setTimeout(attempt, MOTION_POLL_MS);
+        } catch (err) {
+          stopMotionPoll();
+          playBtn.textContent = 'Connection error — retry';
+          playBtn.disabled = false;
         }
+      };
+      attempt();
+    }
 
-        // Single try: If missing from cache/disk, update UI immediately without polling
-        playBtn.textContent = 'File not found on local disk';
-        playBtn.disabled = false;
-
-      } catch (err) {
-        playBtn.textContent = 'Connection error';
-        playBtn.disabled = false;
-      }
+    const MOTION_POLL_MS = 3000;
+    const MOTION_TIMEOUT_S = 90;
+    let motionPollTimer = null;
+    function stopMotionPoll() {
+      if (motionPollTimer) clearTimeout(motionPollTimer);
+      motionPollTimer = null;
     }
 
     function startPlayback(mp4File) {
@@ -306,6 +333,8 @@
     }
 
     function closeModal() {
+      stopMotionPoll();
+      currentSelectedSnap = null;
       const vidPlayer = document.getElementById('modal-vid-player');
       if (vidPlayer) {
         vidPlayer.pause();

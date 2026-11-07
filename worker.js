@@ -95,9 +95,12 @@ export default {
 
         // 2. Not in R2: Drop request ticket marker for r2_watcher.py
         const markerKey = `${loc}/requests/${cameraName}__${file}.req`;
-        await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
-          httpMetadata: { contentType: 'application/json' }
-        });
+        // Only drop the marker once — the gallery polls this endpoint while waiting
+        if (!(await env.MEDIA_BUCKET.head(markerKey))) {
+          await env.MEDIA_BUCKET.put(markerKey, new Uint8Array([1]), {
+            httpMetadata: { contentType: 'application/json' }
+          });
+        }
 
         return jsonResponse({
           status: 'fetching',
@@ -114,21 +117,12 @@ export default {
       if (pathname === '/api/snapshots/list' && request.method === 'GET') {
         const loc = (url.searchParams.get('location') || 'HQ-AD').toUpperCase();
         const cam = (url.searchParams.get('cam') || 'apcam').toLowerCase();
-        const cursor = url.searchParams.get('cursor') || undefined;
-
-        const prefix = `${loc}/snapshots/${cam}/`;
-        const list = await env.MEDIA_BUCKET.list({ prefix, limit: 100, cursor });
-
-        const snaps = (list.objects || [])
-          .filter(o => o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key))
-          .map(o => ({
-            key: o.key,
-            filename: o.key.split('/').pop(),
-            size: o.size,
-            uploaded: o.uploaded
-          }));
-
-        snaps.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+        const snaps = (await listImages(env, `${loc}/snapshots/${cam}/`)).map(o => ({
+          key: o.key,
+          filename: o.key.split('/').pop(),
+          size: o.size,
+          uploaded: o.uploaded
+        }));
 
         return jsonResponse({
           status: 'success',
@@ -164,37 +158,64 @@ export default {
         const index = Math.max(0, parseInt(url.searchParams.get('index') || '0', 10));
         const isJson = url.searchParams.has('json');
 
+        const count = Math.min(50, Math.max(1, parseInt(url.searchParams.get('count') || '1', 10) || 1));
         const prefix = `${rawLoc}/snapshots/${cameraName}/`;
-        const list = await env.MEDIA_BUCKET.list({ prefix, limit: 60 });
-        const images = (list.objects || []).filter(o => o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key));
+        const requestedKey = url.searchParams.get('key');
 
-        if (images.length === 0) {
-          if (isJson) return jsonResponse({ error: 'No snapshots available' }, 404);
-          return new Response(generatePlaceholderSvg(rawLoc, cameraName), {
-            status: 200,
-            headers: { 'Content-Type': 'image/svg+xml' }
-          });
+        // Direct fetch by exact key (used by gallery + live grid) — no listing needed
+        let selectedKey = null;
+        if (requestedKey) {
+          if (!requestedKey.startsWith(prefix)) return jsonResponse({ error: 'Key does not match location/camera' }, 400);
+          selectedKey = requestedKey;
+        } else {
+          const images = await listImages(env, prefix);
+          if (images.length === 0) {
+            if (isJson) return jsonResponse({ status: 'success', snapshots: [] });
+            return new Response(generatePlaceholderSvg(rawLoc, cameraName), {
+              status: 200,
+              headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store' }
+            });
+          }
+          if (isJson) {
+            const slice = images.slice(index, index + count);
+            const first = slice[0] || images[images.length - 1];
+            return jsonResponse({
+              status: 'success',
+              key: first.key,
+              uploaded: first.uploaded,
+              snapshots: slice.map(o => ({ key: o.key, uploaded: o.uploaded, size: o.size }))
+            });
+          }
+          selectedKey = images[Math.min(index, images.length - 1)].key;
         }
 
-        images.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
-        const selectedObject = images[Math.min(index, images.length - 1)];
-
-        if (isJson) {
-          return jsonResponse({
-            status: 'success',
-            key: selectedObject.key,
-            uploaded: selectedObject.uploaded
-          });
-        }
-
-        const object = await env.MEDIA_BUCKET.get(selectedObject.key);
+        const object = await env.MEDIA_BUCKET.get(selectedKey, {
+          onlyIf: request.headers.get('If-None-Match') ? { etagDoesNotMatch: request.headers.get('If-None-Match').replace(/^W\//, '').replace(/"/g, '') } : undefined
+        });
         if (!object) return jsonResponse({ error: 'Snapshot missing' }, 404);
 
         const headers = new Headers();
         headers.set('Content-Type', object.httpMetadata?.contentType || 'image/jpeg');
-        headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        headers.set('ETag', object.httpEtag);
         headers.set('Access-Control-Allow-Origin', '*');
+        // By-key images are stable → let the browser cache them; "latest" must revalidate
+        headers.set('Cache-Control', requestedKey ? 'private, max-age=86400' : 'no-cache');
+        if (!('body' in object) || !object.body) return new Response(null, { status: 304, headers });
         return new Response(object.body, { headers });
+      }
+
+      // ------------------------------------------------------------
+      // 5b. CAMERA LIST FOR A LOCATION (/api/cameras)
+      // ------------------------------------------------------------
+      if (pathname === '/api/cameras' && request.method === 'GET') {
+        const loc = (url.searchParams.get('location') || 'HQ-AD').trim().toUpperCase();
+        const rows = await env.DB.prepare(
+          `SELECT camera_id, name FROM cameras WHERE TRIM(UPPER(location_id)) = ? ORDER BY camera_id ASC`
+        ).bind(loc).all();
+        const cameras = (rows.results || [])
+          .map(c => String(c.name || c.camera_id || '').trim().toLowerCase())
+          .filter(Boolean);
+        return jsonResponse({ status: 'success', location: loc, cameras });
       }
 
       // ------------------------------------------------------------
@@ -258,6 +279,22 @@ export default {
     }
   }
 };
+
+// R2 list() returns keys in lexicographic order, max 1000 per page.
+// Walk every page so "latest" is truly the newest upload, then sort newest-first.
+async function listImages(env, prefix) {
+  const out = [];
+  let cursor;
+  do {
+    const page = await env.MEDIA_BUCKET.list({ prefix, limit: 1000, cursor });
+    for (const o of page.objects || []) {
+      if (o.size > 0 && /\.(jpe?g|png|webp)$/i.test(o.key)) out.push(o);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  out.sort((a, b) => new Date(b.uploaded).getTime() - new Date(a.uploaded).getTime());
+  return out;
+}
 
 async function verifyPassword(inputPassword, storedHash) {
   if (!inputPassword || !storedHash) return false;
